@@ -156,67 +156,71 @@ def _post_bearer(url, token, payload=None):
         debug(r.text)
         r.raise_for_status()
     return r.status_code, body
-
+#--------------------------------------------------------------------------patch
 # ---------------- LiveAvatar helpers ----------------
-def create_session_token_full(avatar_id: str, voice_id: Optional[str] = None, language: str = "en") -> dict:
+def create_session_token_full(avatar_id: str, voice_id: str, context_id: str, language: str = "en") -> dict:
     """
-    Create a LiveAvatar FULL-mode session token for the given avatar/voice.
-
-    Returns a dict with:
-      - session_id
-      - session_token
+    Calls:
+      POST https://api.liveavatar.com/v1/sessions/token
+    Returns:
+      {"session_id": <uuid>, "session_token": <jwt>}
+    Response can be wrapped as {"code":..., "data": {...}, "message":...}
     """
     payload = {
         "mode": "FULL",
         "avatar_id": avatar_id,
         "avatar_persona": {
-            "voice_id": voice_id or FIXED_AVATAR.get("default_voice"),
-            "context_id": LIVEAVATAR_CONTEXT_ID,
+            "voice_id": voice_id,
+            "context_id": context_id,
             "language": language,
         },
     }
+
     status, body = _post_xapi(API_SESS_TOKEN, payload)
-    data = body or {}
-    #sid = data.get("session_id")
-    #session_token = data.get("session_token")
-    sid = body["data"]["session_id"]
-    session_token = body["data"]["session_token"]
-    
+
+    # Unwrap common envelope format
+    data = (body or {}).get("data", body or {})
+
+    sid = data.get("session_id")
+    session_token = data.get("session_token")
+
     if not sid or not session_token:
         raise RuntimeError(f"Missing session_id/session_token in response: {body}")
+
     return {"session_id": sid, "session_token": session_token}
 
 
-def start_liveavatar_session(avatar_id: str, voice_id: Optional[str] = None, language: str = "en") -> dict:
+def start_liveavatar_session(avatar_id: str, voice_id: str, context_id: str, language: str = "en") -> dict:
     """
-    Convenience helper: create a LiveAvatar FULL-mode session and start it.
+    Calls:
+      1) POST /v1/sessions/token (X-API-KEY)
+      2) POST /v1/sessions/start (Authorization: Bearer session_token)
 
     Returns dict with:
       - session_id
       - session_token
       - livekit_url
       - livekit_client_token
-      - ws_url (optional, for advanced command-event integrations)
+      - ws_url (optional)
     """
-    created = create_session_token_full(avatar_id, voice_id, language=language)
+    created = create_session_token_full(
+        avatar_id=avatar_id,
+        voice_id=voice_id,
+        context_id=context_id,
+        language=language,
+    )
+
     session_id = created["session_id"]
     session_token = created["session_token"]
 
     status, body = _post_bearer(API_SESS_START, session_token, {})
-    data = body or {}
 
-    # The exact shape may evolve; try a few common patterns defensively.
-    livekit_url = (
-        data.get("livekit_url")
-        or (data.get("livekit") or {}).get("url")
-        or data.get("liveKitUrl")
-    )
-    livekit_client_token = (
-        data.get("livekit_client_token")
-        or (data.get("livekit") or {}).get("token")
-        or data.get("token")
-    )
-    ws_url = data.get("ws_url") or (data.get("websocket") or {}).get("url")
+    # Unwrap common envelope format
+    data = (body or {}).get("data", body or {})
+
+    livekit_url = data.get("livekit_url")
+    livekit_client_token = data.get("livekit_client_token")
+    ws_url = data.get("ws_url")  # can be None
 
     if not livekit_url or not livekit_client_token:
         raise RuntimeError(f"Missing LiveKit connection info from /sessions/start: {body}")
@@ -229,6 +233,7 @@ def start_liveavatar_session(avatar_id: str, voice_id: Optional[str] = None, lan
         "ws_url": ws_url,
     }
 
+#--------------------------------------------------------------------------patch
 
 def keep_session_alive(session_id: str, session_token: str) -> None:
     """
