@@ -1,109 +1,177 @@
 <!doctype html>
 <html>
-  <head>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
-    <title>Avatharam – LiveAvatar Viewer</title>
-    <style>
-      html,body{
-        margin:0;padding:0;height:100%;width:100%;
-        background:#050505;color:#f5f5f5;
-        font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-      }
-      .wrap{
-        display:flex;flex-direction:column;gap:8px;
-        width:100%;height:100%;
-        align-items:center;justify-content:flex-start;
-        padding:8px 6px 10px;
-      }
-      .title{
-        font-size:14px;text-align:center;margin-top:4px;opacity:.9;
-      }
-      .title span.name{font-weight:600;}
-      .stage{
-        position:relative;width:100%;max-width:420px;
-        aspect-ratio:16/9;
-        background:#111;border-radius:18px;overflow:hidden;
-        border:1px solid #222;
-        display:flex;align-items:stretch;justify-content:center;
-      }
-      #lkFrame{
-        border:0;margin:0;padding:0;
-        width:100%;height:100%;
-      }
-      .status{
-        font-size:12px;opacity:.75;text-align:center;margin-top:2px;
-      }
-      .toolbar{
-        display:flex;gap:8px;margin-top:4px;justify-content:center;
-      }
-      .btn{
-        border-radius:999px;
-        padding:4px 12px;
-        font-size:12px;
-        border:1px solid #444;
-        background:#181818;
-        color:#f5f5f5;
-        cursor:pointer;
-      }
-      .btn:hover{background:#262626;}
-    </style>
-  </head>
-  <body>
-    <div class="wrap">
-      <div class="title">
-        <span class="name" id="aname">LiveAvatar</span>
-        <span> · Live session</span>
-      </div>
-      <div class="stage">
-        <iframe
-          id="lkFrame"
-          allow="camera; microphone; autoplay; clipboard-read; clipboard-write"
-          allowfullscreen
-        ></iframe>
-      </div>
-      <div class="status" id="status">Preparing LiveAvatar session…</div>
-      <div class="toolbar">
-        <button class="btn" id="refreshBtn">Reconnect</button>
-      </div>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <title>LiveAvatar Viewer</title>
+
+  <!-- LiveKit JS SDK (UMD) via cdnjs -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.15.7/livekit-client.umd.min.js"></script>
+
+  <style>
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background: #0b0b0b; color: #eee; }
+    .wrap { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 14px; gap: 10px; }
+    .title { font-size: 14px; opacity: 0.9; }
+    .stage { width: 100%; max-width: 720px; aspect-ratio: 16/9; background: #111; border-radius: 16px; overflow: hidden; position: relative; }
+    video { width: 100%; height: 100%; object-fit: cover; background: #111; }
+    .status { font-size: 12px; opacity: 0.9; }
+    .status span { opacity: 0.8; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title"><b>__AVATAR_NAME__</b> · Live session</div>
+    <div class="stage">
+      <video id="avatarVideo" autoplay playsinline></video>
     </div>
+    <div class="status" id="status">Connecting…</div>
+  </div>
 
-    <script>
-      // These placeholders are replaced by Streamlit before rendering.
-      const AVATAR_NAME   = "__AVATAR_NAME__";
-      const LIVEKIT_URL   = "__LIVEKIT_URL__";
-      const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
-      const WS_URL        = "__WS_URL__"; // reserved for advanced command-events if you add them later
+<script>
+(function () {
+  const LIVEKIT_URL = "__LIVEKIT_URL__";
+  const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
+  const SPEAK = __SPEAK_PAYLOAD_JSON__;
 
-      const nameEl    = document.getElementById("aname");
-      const statusEl  = document.getElementById("status");
-      const frameEl   = document.getElementById("lkFrame");
-      const refreshEl = document.getElementById("refreshBtn");
+  const statusEl = document.getElementById("status");
+  const avatarVideo = document.getElementById("avatarVideo");
 
-      nameEl.textContent = AVATAR_NAME || "LiveAvatar";
+  const LK = window.LiveKitClient;
+  if (!LK) {
+    statusEl.textContent = "LiveKitClient not loaded.";
+    return;
+  }
 
-      function connect() {
-        if (!LIVEKIT_URL || !LIVEKIT_TOKEN) {
-          statusEl.textContent = "Missing LiveKit URL or token – start a session from the Streamlit app.";
-          return;
-        }
-        const src =
-          "https://meet.livekit.io/custom"
-          + "?liveKitUrl=" + encodeURIComponent(LIVEKIT_URL)
-          + "&token="     + encodeURIComponent(LIVEKIT_TOKEN);
+  // --- Helpers ---
+  const enc = new TextEncoder();
 
-        frameEl.src = src;
-        statusEl.textContent =
-          "If the avatar does not appear, check browser permissions for camera/mic and reload.";
+  function setStatus(msg) {
+    statusEl.textContent = msg;
+  }
+
+  // LiveAvatar FULL-mode command event sender.
+  // Docs only specify event name + data schema (text).
+  // In practice, many event systems expect a "type" field.
+  // We send {type: <event>, ...data }.
+  function buildCommand(eventName, dataObj) {
+    return Object.assign({ type: eventName }, (dataObj || {}));
+  }
+
+  async function publishCommand(room, eventName, dataObj) {
+    const payload = buildCommand(eventName, dataObj);
+    const bytes = enc.encode(JSON.stringify(payload));
+    // RELIABLE is better for commands.
+    await room.localParticipant.publishData(bytes, LK.DataPacket_Kind.RELIABLE);
+  }
+
+  // --- LiveKit room ---
+  const room = new LK.Room({
+    adaptiveStream: true,
+    dynacast: true,
+    // autoSubscribe=true so we receive the avatar tracks
+  });
+
+  // Track management: attach ONLY remote avatar video/audio.
+  function attachRemoteTrack(track) {
+    try {
+      if (track.kind === "video") {
+        track.attach(avatarVideo);
+      } else if (track.kind === "audio") {
+        // Attach audio to hidden element
+        const a = track.attach();
+        a.style.display = "none";
+        document.body.appendChild(a);
       }
+    } catch (e) {
+      console.warn("attach failed", e);
+    }
+  }
 
-      refreshEl.addEventListener("click", () => {
-        frameEl.src = "";
-        setTimeout(connect, 50);
+  room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+    // The HeyGen/LiveAvatar participant will publish video + audio
+    attachRemoteTrack(track);
+  });
+
+  room.on(LK.RoomEvent.ParticipantConnected, (p) => {
+    // For debugging; not shown in UI.
+    // console.log("participant connected", p.identity);
+  });
+
+  room.on(LK.RoomEvent.Disconnected, () => {
+    setStatus("Disconnected.");
+  });
+
+  // Listen for server events (optional)
+  room.on(LK.RoomEvent.DataReceived, (payload, participant, kind) => {
+    try {
+      const txt = new TextDecoder().decode(payload);
+      // LiveAvatar server events are emitted into the room; useful for debugging.
+      // console.log("data recv", txt);
+    } catch (_) {}
+  });
+
+  async function connect() {
+    setStatus("Connecting to LiveKit…");
+    await room.connect(LIVEKIT_URL, LIVEKIT_TOKEN, { autoSubscribe: true });
+
+    // IMPORTANT: We do NOT enable camera/mic.
+    // This prevents the user's video tile + permission prompts.
+    // (We never call createLocalTracks / setCameraEnabled / setMicrophoneEnabled)
+
+    setStatus("Connected. Waiting for avatar tracks…");
+
+    // If remote avatar already published tracks before we subscribed:
+    room.remoteParticipants.forEach((p) => {
+      p.trackPublications.forEach((pub) => {
+        if (pub.isSubscribed && pub.track) attachRemoteTrack(pub.track);
       });
+    });
 
-      // Initial auto-connect
-      connect();
-    </script>
-  </body>
+    // Speak logic
+    const text = (SPEAK.text || "").trim();
+    if (!text) return;
+
+    // Auto-speak, or speak when nonce increments (Streamlit triggers iframe reload).
+    if (SPEAK.auto || (SPEAK.nonce && SPEAK.nonce > 0)) {
+      await doSpeak(text);
+    }
+
+    // Stress mode: repeat speak_text N times
+    if (SPEAK.stress) {
+      const repeat = Math.max(1, Number(SPEAK.repeat || 1));
+      const interval = Math.max(250, Number(SPEAK.interval_ms || 1000));
+
+      let i = 0;
+      const timer = setInterval(async () => {
+        i += 1;
+        try {
+          await doSpeak(text);
+          setStatus(`Speaking… (${i}/${repeat})`);
+        } catch (e) {
+          console.error(e);
+          setStatus("Speak failed (see console).");
+          clearInterval(timer);
+        }
+        if (i >= repeat) {
+          clearInterval(timer);
+          setStatus("Done.");
+        }
+      }, interval);
+    }
+  }
+
+  async function doSpeak(text) {
+    // Primary command: avatar.speak_text
+    // Event data schema: {"text": string}
+    await publishCommand(room, "avatar.speak_text", { text });
+  }
+
+  connect().catch((e) => {
+    console.error(e);
+    setStatus("Connect failed (see console).");
+  });
+
+})();
+</script>
+</body>
 </html>
