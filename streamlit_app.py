@@ -312,10 +312,57 @@ with cols[0]:
         ss.show_sidebar = not ss.show_sidebar
         debug(f"[ui] sidebar -> {ss.show_sidebar}")
 
-# (… your sidebar content, GPT chat configuration, etc …)
-# I’m not rewriting all of that here, since it isn’t impacted by the
-# migration – you can keep the existing blocks as-is.
+# ---------------- Sidebar panel ----------------
+# Streamlit's sidebar can't be programmatically "opened", so we use the ☰ button
+# to show/hide the CONTENT inside the sidebar.
+with st.sidebar:
+    st.markdown("### Avatharam Control Panel")
+    st.caption("Use the ☰ button to show/hide these controls.")
 
+    if not ss.show_sidebar:
+        st.info("Sidebar controls are hidden. Click ☰ on the main page.")
+    else:
+        # Session controls
+        st.markdown("#### Session")
+        if st.button("Start session", key="sb_start_session", use_container_width=True):
+            try:
+                created = start_liveavatar_session(FIXED_AVATAR["avatar_id"], FIXED_AVATAR.get("default_voice"))
+                ss.session_id            = created["session_id"]
+                ss.session_token         = created["session_token"]
+                ss.livekit_url           = created["livekit_url"]
+                ss.livekit_client_token  = created["livekit_client_token"]
+                ss.ws_url                = created.get("ws_url")
+                ss.auto_started          = True
+                st.success("Session started.")
+            except Exception as e:
+                st.error(f"Failed to start session: {e}")
+
+        if st.button("Stop session", key="sb_stop_session", use_container_width=True):
+            stop_session(ss.session_id, ss.session_token)
+            ss.session_id = None
+            ss.session_token = None
+            ss.livekit_url = None
+            ss.livekit_client_token = None
+            ss.ws_url = None
+            ss.stress_active = False
+            ss.autorefresh_on = False
+            ss.next_keepalive_at = 0.0
+            ss.auto_started = False
+            st.success("Session stopped.")
+
+        # Instruction text used by the Instruction button
+        st.markdown("#### Instruction text")
+        ss.test_text = st.text_area(
+            "Speech.txt content (editable)",
+            value=ss.test_text if ss.test_text else DEFAULT_INSTRUCTION,
+            height=180,
+            key="sb_test_text",
+        )
+
+        st.markdown("#### Status")
+        st.write(f"session_id: {ss.session_id or '—'}")
+        st.write(f"livekit_url: {'set' if ss.livekit_url else '—'}")
+        st.write(f"stress_active: {ss.stress_active}")
 # ---------------- Auto-start the avatar session ----------------
 if not ss.auto_started:
     try:
