@@ -1,4 +1,4 @@
-# Avatharam-3.0 (LiveAvatar v1)
+# Avatharam-3.0 (LiveAvatar v3)
 # Stress-test-3.0 – migrated from legacy /streaming.* to LiveAvatar Sessions API
 
 import atexit
@@ -14,8 +14,9 @@ import streamlit.components.v1 as components
 
 # ---------------- Fixed avatar choice ----------------
 FIXED_AVATAR = {
-    "avatar_id": "June_HR_public",
-    "default_voice": "68dedac41a9f46a6a4271a95c733823c",
+    # LiveAvatar v1 requires UUIDs (not legacy names like "June_HR_public")
+    "avatar_id": "65f9e3c9-d48b-4118-b73a-4ae2e3cbb8f0",  # June HR
+    "default_voice": "62bbb4b2-bb26-4727-bc87-cfb2bd4e0cc8",  # June HR default_voice.id
     "normal_preview": "https://files2.heygen.ai/avatar/v3/74447a27859a456c955e01f21ef18216_45620/preview_talk_1.webp",
     "pose_name": "June HR",
     "status": "ACTIVE",
@@ -34,8 +35,22 @@ OPENAI_API_KEY = (
     or os.getenv("OPENAI_API_KEY")
 )
 
+# LiveAvatar FULL mode requires a Context UUID (avatar_persona.context_id).
+LIVEAVATAR_CONTEXT_ID = (
+    SECRETS.get("LiveAvatar", {}).get("context_id")
+    or SECRETS.get("liveavatar", {}).get("context_id")
+    or os.getenv("LIVEAVATAR_CONTEXT_ID")
+)
+
 if not HEYGEN_API_KEY:
     st.error("Missing HeyGen / LiveAvatar API key in .streamlit/secrets.toml")
+    st.stop()
+
+if not LIVEAVATAR_CONTEXT_ID:
+    st.error(
+        "Missing LiveAvatar context_id (UUID). Add it to secrets as:\n"
+        "[LiveAvatar]\ncontext_id = \"<your-context-uuid>\""
+    )
     st.stop()
 
 # ---------------- Endpoints (LiveAvatar v1) ----------------
@@ -156,6 +171,7 @@ def create_session_token_full(avatar_id: str, voice_id: Optional[str] = None, la
         "avatar_id": avatar_id,
         "avatar_persona": {
             "voice_id": voice_id or FIXED_AVATAR.get("default_voice"),
+            "context_id": LIVEAVATAR_CONTEXT_ID,
             "language": language,
         },
     }
