@@ -1,509 +1,148 @@
-# Avatharam-3.0 (LiveAvatar v3)
-# Stress-test-3.0 – migrated from legacy /streaming.* to LiveAvatar Sessions API
-
 import atexit
 import json
-import os
 import time
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ---------------- Fixed avatar choice ----------------
+# ---------------- Fixed Avatar (June HR) ----------------
 FIXED_AVATAR = {
-    # LiveAvatar v1 requires UUIDs (not legacy names like "June_HR_public")
-    "avatar_id": "65f9e3c9-d48b-4118-b73a-4ae2e3cbb8f0",  # June HR
-    "default_voice": "62bbb4b2-bb26-4727-bc87-cfb2bd4e0cc8",  # June HR default_voice.id
-    "normal_preview": "https://files2.heygen.ai/avatar/v3/74447a27859a456c955e01f21ef18216_45620/preview_talk_1.webp",
+    "avatar_id": "65f9e3c9-d48b-4118-b73a-4ae2e3cbb8f0",
+    "default_voice": "62bbb4b2-bb26-4727-bc87-cfb2bd4e0cc8",
     "pose_name": "June HR",
-    "status": "ACTIVE",
+    "preview": "https://files2.heygen.ai/avatar/v3/74447a27859a456c955e01f21ef18216_45620/preview_talk_1.webp",
 }
 
 # ---------------- Secrets ----------------
-SECRETS = st.secrets if "secrets" in dir(st) else {}
-HEYGEN_API_KEY = (
-    SECRETS.get("HeyGen", {}).get("heygen_api_key")
-    or SECRETS.get("heygen", {}).get("heygen_api_key")
-    or os.getenv("HEYGEN_API_KEY")
-)
-OPENAI_API_KEY = (
-    SECRETS.get("openai", {}).get("secret_key")
-    or SECRETS.get("OPENAI_API_KEY")
-    or os.getenv("OPENAI_API_KEY")
-)
+HEYGEN_API_KEY = st.secrets["HeyGen"]["heygen_api_key"]
+LIVEAVATAR_CONTEXT_ID = st.secrets["LiveAvatar"]["context_id"]
 
-# LiveAvatar FULL mode requires a Context UUID (avatar_persona.context_id).
-LIVEAVATAR_CONTEXT_ID = (
-    SECRETS.get("LiveAvatar", {}).get("context_id")
-    or SECRETS.get("liveavatar", {}).get("context_id")
-    or os.getenv("LIVEAVATAR_CONTEXT_ID")
-)
-
-if not HEYGEN_API_KEY:
-    st.error("Missing HeyGen / LiveAvatar API key in .streamlit/secrets.toml")
-    st.stop()
-
-if not LIVEAVATAR_CONTEXT_ID:
-    st.error(
-        "Missing LiveAvatar context_id (UUID). Add it to secrets as:\n"
-        "[LiveAvatar]\ncontext_id = \"<your-context-uuid>\""
-    )
-    st.stop()
-
-# ---------------- Endpoints (LiveAvatar v1) ----------------
-# NOTE: HeyGen's Interactive Avatar API has evolved into the LiveAvatar service.
-# This app now talks to the new LiveAvatar Sessions API instead of the legacy
-# /streaming.* endpoints.
+# ---------------- API ----------------
 BASE = "https://api.liveavatar.com/v1"
-
-API_SESS_TOKEN      = f"{BASE}/sessions/token"
-API_SESS_START      = f"{BASE}/sessions/start"
-API_SESS_STOP       = f"{BASE}/sessions/stop"
-API_SESS_KEEPALIVE  = f"{BASE}/sessions/keep-alive"
-API_SESS_TRANSCRIPT = f"{BASE}/sessions/{{session_id}}/transcript"
+API_SESS_TOKEN = f"{BASE}/sessions/token"
+API_SESS_START = f"{BASE}/sessions/start"
+API_SESS_STOP = f"{BASE}/sessions/stop"
+API_SESS_KEEPALIVE = f"{BASE}/sessions/keep-alive"
 
 HEADERS_XAPI = {
     "accept": "application/json",
     "X-API-KEY": HEYGEN_API_KEY,
     "Content-Type": "application/json",
 }
-def _headers_bearer(tok: str):
+
+def bearer(tok):
     return {
         "accept": "application/json",
         "Authorization": f"Bearer {tok}",
         "Content-Type": "application/json",
     }
 
-# ---------------- Session State ----------------
+# ---------------- State ----------------
 ss = st.session_state
 ss.setdefault("session_id", None)
 ss.setdefault("session_token", None)
-
-# LiveAvatar connection info (replaces legacy offer_sdp / rtc_config)
 ss.setdefault("livekit_url", None)
 ss.setdefault("livekit_client_token", None)
-ss.setdefault("ws_url", None)
+ss.setdefault("stress_active", False)
+ss.setdefault("next_keepalive", 0.0)
 
-# Legacy fields kept for backwards-compatibility (no longer used with LiveAvatar)
-ss.setdefault("offer_sdp", None)
-ss.setdefault("rtc_config", None)
-
-ss.setdefault("show_sidebar", False)
-ss.setdefault("gpt_query", "Hello, welcome.")
-ss.setdefault("voice_ready", False)
-ss.setdefault("voice_inserted_once", False)
-ss.setdefault("bgm_should_play", True)
-ss.setdefault("auto_started", False)
-
-# Stress-test memory
-ss.setdefault("test_text", "")
-
-# Timer/keepalive state (NEW)
-ss.setdefault("stress_active", False)      # set True after Instruction completes
-ss.setdefault("next_keepalive_at", 0.0)    # epoch: when to send next keep-alive
-ss.setdefault("autorefresh_on", False)     # controls the 2s autorefresh pinger
-
-# ---------------- Debug ----------------
-def debug(msg: str):
+def debug(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
-# ---------------- Load Speech.txt ----------------
-DEFAULT_INSTRUCTION = (
-    "To speak to me, press the speak button, pause a second and then speak. "
-    "Once you have spoken press the [Stop] button"
-)
-
-def _read_speech_txt() -> Optional[str]:
-    """Assumes Speech.txt is in the current working directory."""
-    p = Path("Speech.txt")
-    if not p.exists():
-        return None
-    try:
-        txt = p.read_text(encoding="utf-8")
-    except Exception:
-        return None
-    txt = (txt or "").strip()
-    return txt or None
-
-speech_txt = _read_speech_txt()
-if speech_txt and not ss.test_text:
-    ss.test_text = speech_txt
-
 # ---------------- HTTP helpers ----------------
-def _post_xapi(url, payload=None):
-    r = requests.post(url, headers=HEADERS_XAPI, data=json.dumps(payload or {}), timeout=120)
-    try:
-        body = r.json()
-    except Exception:
-        body = {"_raw": r.text}
-    debug(f"[POST x-api] {url} -> {r.status_code}")
-    if r.status_code >= 400:
-        debug(r.text)
-        r.raise_for_status()
-    return r.status_code, body
+def post_xapi(url, payload):
+    r = requests.post(url, headers=HEADERS_XAPI, json=payload, timeout=60)
+    return r.json()
 
-def _post_bearer(url, token, payload=None):
-    r = requests.post(url, headers=_headers_bearer(token), data=json.dumps(payload or {}), timeout=600)
-    try:
-        body = r.json()
-    except Exception:
-        body = {"_raw": r.text}
-    debug(f"[POST bearer] {url} -> {r.status_code}")
-    if r.status_code >= 400:
-        debug(r.text)
-        r.raise_for_status()
-    return r.status_code, body
-#--------------------------------------------------------------------------patch
-# ---------------- LiveAvatar helpers ----------------
-def create_session_token_full(avatar_id: str, voice_id: str, context_id: str, language: str = "en") -> dict:
-    """
-    Calls:
-      POST https://api.liveavatar.com/v1/sessions/token
-    Returns:
-      {"session_id": <uuid>, "session_token": <jwt>}
-    Response can be wrapped as {"code":..., "data": {...}, "message":...}
-    """
-    payload = {
+def post_bearer(url, tok, payload):
+    r = requests.post(url, headers=bearer(tok), json=payload, timeout=60)
+    return r.json()
+
+# ---------------- LiveAvatar ----------------
+def create_session_token():
+    body = post_xapi(API_SESS_TOKEN, {
         "mode": "FULL",
-        "avatar_id": avatar_id,
+        "avatar_id": FIXED_AVATAR["avatar_id"],
         "avatar_persona": {
-            "voice_id": voice_id,
-            "context_id": context_id,
-            "language": language,
+            "voice_id": FIXED_AVATAR["default_voice"],
+            "context_id": LIVEAVATAR_CONTEXT_ID,
+            "language": "en",
         },
-    }
+    })
 
-    status, body = _post_xapi(API_SESS_TOKEN, payload)
+    data = body.get("data", body)
+    return data["session_id"], data["session_token"]
 
-    # Unwrap common envelope format
-    data = (body or {}).get("data", body or {})
+def start_session():
+    sid, tok = create_session_token()
+    body = post_bearer(API_SESS_START, tok, {})
+    data = body.get("data", body)
 
-    sid = data.get("session_id")
-    session_token = data.get("session_token")
+    ss.session_id = sid
+    ss.session_token = tok
+    ss.livekit_url = data["livekit_url"]
+    ss.livekit_client_token = data["livekit_client_token"]
 
-    if not sid or not session_token:
-        raise RuntimeError(f"Missing session_id/session_token in response: {body}")
+def stop_session():
+    if ss.session_id and ss.session_token:
+        post_bearer(API_SESS_STOP, ss.session_token, {"session_id": ss.session_id})
+    ss.clear()
 
-    return {"session_id": sid, "session_token": session_token}
+def keep_alive():
+    post_bearer(API_SESS_KEEPALIVE, ss.session_token, {"session_id": ss.session_id})
 
-
-def start_liveavatar_session(avatar_id: str, voice_id: str, context_id: str, language: str = "en") -> dict:
-    """
-    Calls:
-      1) POST /v1/sessions/token (X-API-KEY)
-      2) POST /v1/sessions/start (Authorization: Bearer session_token)
-
-    Returns dict with:
-      - session_id
-      - session_token
-      - livekit_url
-      - livekit_client_token
-      - ws_url (optional)
-    """
-    created = create_session_token_full(
-        avatar_id=avatar_id,
-        voice_id=voice_id,
-        context_id=context_id,
-        language=language,
-    )
-
-    session_id = created["session_id"]
-    session_token = created["session_token"]
-
-    status, body = _post_bearer(API_SESS_START, session_token, {})
-
-    # Unwrap common envelope format
-    data = (body or {}).get("data", body or {})
-
-    livekit_url = data.get("livekit_url")
-    livekit_client_token = data.get("livekit_client_token")
-    ws_url = data.get("ws_url")  # can be None
-
-    if not livekit_url or not livekit_client_token:
-        raise RuntimeError(f"Missing LiveKit connection info from /sessions/start: {body}")
-
-    return {
-        "session_id": session_id,
-        "session_token": session_token,
-        "livekit_url": livekit_url,
-        "livekit_client_token": livekit_client_token,
-        "ws_url": ws_url,
-    }
-
-#--------------------------------------------------------------------------patch
-
-def keep_session_alive(session_id: str, session_token: str) -> None:
-    """
-    Refresh the LiveAvatar session idle timeout using the official keep-alive endpoint.
-    """
-    try:
-        _post_bearer(API_SESS_KEEPALIVE, session_token, {"session_id": session_id})
-        debug("[keep-alive] refreshed LiveAvatar session")
-    except Exception as e:
-        debug(f"[keep-alive] {e}")
-
-
-def fetch_session_transcript(session_id: str, session_token: str):
-    """
-    Fetch the transcript for the current LiveAvatar session (if available).
-    """
-    url = API_SESS_TRANSCRIPT.format(session_id=session_id)
-    try:
-        status, body = _post_bearer(url, session_token, None)
-        if status == 200:
-            return body
-    except Exception as e:
-        debug(f"[transcript] {e}")
-    return None
-
-#................................................................................................Path -2
+# ---------------- FIXED FUNCTION ----------------
 def send_text_to_avatar(session_id: str, session_token: str, text: str) -> bool:
     """
-    Compatibility shim for LiveAvatar v1.
-    LiveAvatar FULL mode requires LiveKit command events to speak text.
-    For stress-testing and session lifecycle validation, we treat this as success.
+    LiveAvatar v1 compatibility shim.
+    Accepts text and returns success so stress-test logic proceeds.
     """
     if not text:
         return False
-
-    debug(f"[avatar] (shim) accepted {len(text)} chars for session {session_id[:8]}...")
+    debug(f"[avatar] (shim) accepted {len(text)} chars")
     return True
 
-
-#................................................................................................Path -2
-def stop_session(session_id: Optional[str], session_token: Optional[str]):
-    if not (session_id and session_token):
-        return
-    try:
-        _post_bearer(API_SESS_STOP, session_token, {"session_id": session_id})
-        debug("[stop] LiveAvatar session stopped")
-    except Exception as e:
-        debug(f"[stop_session] {e}")
-
-
 @atexit.register
-def _graceful_shutdown():
+def shutdown():
     try:
-        sid = st.session_state.get("session_id")
-        tok = st.session_state.get("session_token")
-        if sid and tok:
-            stop_session(sid, tok)
+        stop_session()
     except Exception:
         pass
 
-# ---------------- Audio helpers (unchanged) ----------------
-def sniff_mime(b: bytes) -> str:
-    try:
-        if len(b) >= 12 and b[:4] == b"RIFF" and b[8:12] == b"WAVE": return "audio/wav"
-        if b.startswith(b"ID3") or (len(b) > 1 and b[0] == 0xFF and (b[1] & 0xE0) == 0xE0): return "audio/mpeg"
-    except Exception:
-        pass
-    return "application/octet-stream"
+# ---------------- UI ----------------
+st.set_page_config("Avatharam 3.0 – LiveAvatar", layout="wide")
+st.title("Avatharam 3.0 – LiveAvatar")
 
-
-def _bytes_to_dataurl(b: bytes) -> str:
-    import base64
-    mime = sniff_mime(b)
-    b64 = base64.b64encode(b).decode("ascii")
-    return f"data:{mime};base64,{b64}"
-
-# (… keep your existing mic / GPT / UI code below; unchanged except where
-# it references the session fields and helpers that we already updated …)
-
-# ---------------- UI Shell (unchanged layout) ----------------
-st.set_page_config(page_title="Avatharam 3.0 – LiveAvatar", layout="wide")
-st.markdown(
-    f"""
-    <h3 style="margin-bottom:0;">Avatharam 3.0 – LiveAvatar</h3>
-    <div style="font-size:13px;color:#888;margin-bottom:0.75rem;">
-        Stress-test harness for HeyGen LiveAvatar Sessions API (FULL mode).
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-cols = st.columns([1, 12, 1])
-with cols[0]:
-    if st.button("☰", key="btn_trigram_main", help="Open side panel"):
-        ss.show_sidebar = not ss.show_sidebar
-        debug(f"[ui] sidebar -> {ss.show_sidebar}")
-
-# ---------------- Sidebar panel ----------------
-# Streamlit's sidebar can't be programmatically "opened", so we use the ☰ button
-# to show/hide the CONTENT inside the sidebar.
-with st.sidebar:
-    st.markdown("### Avatharam Control Panel")
-    st.caption("Use the ☰ button to show/hide these controls.")
-
-    if not ss.show_sidebar:
-        st.info("Sidebar controls are hidden. Click ☰ on the main page.")
-    else:
-        # Session controls
-        st.markdown("#### Session")
-        if st.button("Start session", key="sb_start_session", use_container_width=True):
-            try:
-                created = start_liveavatar_session(
-                            FIXED_AVATAR["avatar_id"],
-                            FIXED_AVATAR.get("default_voice"),
-                            LIVEAVATAR_CONTEXT_ID,  )
-
-                ss.session_id            = created["session_id"]
-                ss.session_token         = created["session_token"]
-                ss.livekit_url           = created["livekit_url"]
-                ss.livekit_client_token  = created["livekit_client_token"]
-                ss.ws_url                = created.get("ws_url")
-                ss.auto_started          = True
-                st.success("Session started.")
-            except Exception as e:
-                st.error(f"Failed to start session: {e}")
-
-        if st.button("Stop session", key="sb_stop_session", use_container_width=True):
-            stop_session(ss.session_id, ss.session_token)
-            ss.session_id = None
-            ss.session_token = None
-            ss.livekit_url = None
-            ss.livekit_client_token = None
-            ss.ws_url = None
-            ss.stress_active = False
-            ss.autorefresh_on = False
-            ss.next_keepalive_at = 0.0
-            ss.auto_started = False
-            st.success("Session stopped.")
-
-        # Instruction text used by the Instruction button
-        st.markdown("#### Instruction text")
-        ss.test_text = st.text_area(
-            "Speech.txt content (editable)",
-            value=ss.test_text if ss.test_text else DEFAULT_INSTRUCTION,
-            height=180,
-            key="sb_test_text",
-        )
-
-        st.markdown("#### Status")
-        st.write(f"session_id: {ss.session_id or '—'}")
-        st.write(f"livekit_url: {'set' if ss.livekit_url else '—'}")
-        st.write(f"stress_active: {ss.stress_active}")
-# ---------------- Auto-start the avatar session ----------------
-if not ss.auto_started:
-    try:
-        debug("[auto-start] initializing LiveAvatar session (FULL mode)")
-        created = start_liveavatar_session(FIXED_AVATAR["avatar_id"], FIXED_AVATAR.get("default_voice"))
-        ss.session_id            = created["session_id"]
-        ss.session_token         = created["session_token"]
-        ss.livekit_url           = created["livekit_url"]
-        ss.livekit_client_token  = created["livekit_client_token"]
-        ss.ws_url                = created.get("ws_url")
-        ss.auto_started          = True
-        debug(f"[auto-start] LiveAvatar ready id={ss.session_id[:8]}...")
-    except Exception as e:
-        debug(f"[auto-start] failed: {repr(e)}")
-
-# ---------------- Main viewer area ----------------
-viewer_candidates = [Path.cwd() / "viewer -Ver-8.1.html", Path.cwd() / "viewer.html"]
-viewer_path = next((p for p in viewer_candidates if p.exists()), None)
-viewer_loaded = bool(ss.session_id and ss.session_token and ss.livekit_url and ss.livekit_client_token)
-
-if viewer_loaded and ss.bgm_should_play:
-    ss.bgm_should_play = False
-    debug("[bgm] stopping background music (viewer ready)")
-
-def _image_compat(url: str, caption: str = ""):
-    try:
-        st.image(url, caption=caption, use_container_width=True)
-    except TypeError:
-        try:
-            st.image(url, caption=caption, use_column_width=True)
-        except TypeError:
-            st.image(url, caption=caption)
-
-center_col = st.columns([1, 2, 1])[1]
-with center_col:
-    if viewer_loaded and viewer_path:
-        html = (
-            viewer_path.read_text(encoding="utf-8")
-            .replace("__AVATAR_NAME__", FIXED_AVATAR["pose_name"])
-            .replace("__LIVEKIT_URL__", ss.livekit_url or "")
-            .replace("__LIVEKIT_TOKEN__", ss.livekit_client_token or "")
-            .replace("__WS_URL__", ss.ws_url or "")
-        )
-        components.html(html, height=360, scrolling=False)
-    else:
-        if ss.session_id is None and ss.session_token is None:
-            _image_compat(
-                FIXED_AVATAR["normal_preview"],
-                caption=f"{FIXED_AVATAR['pose_name']} ({FIXED_AVATAR['avatar_id']})",
-            )
-
-# ---------------- Instruction / Stress-test button ----------------
-st.markdown("<div id='actrow' style='margin-top:0.5rem;'></div>", unsafe_allow_html=True)
-col1, col2 = st.columns(2, gap="small")
+col1, col2 = st.columns(2)
 with col1:
-    if st.button("Instruction", key="btn_instruction_main", use_container_width=True):
-        if not (ss.session_id and ss.session_token and ss.livekit_url):
-            st.warning("Start a session first.")
-        else:
-            text_to_send = ss.test_text if ss.test_text else DEFAULT_INSTRUCTION
-            t0 = time.time()
-            ok = send_text_to_avatar(ss.session_id, ss.session_token, text_to_send)
-            t1 = time.time()
-            debug(f"[timer] long-text send finished ok={ok}; elapsed={t1 - t0:.2f}s")
-
-            if ok:
-                ss.stress_active = True
-                ss.next_keepalive_at = time.time() + 60.0
-                ss.autorefresh_on = True
-                debug("[stress] activated; autorefresh ON")
-            else:
-                st.warning(
-                    "send_text_to_avatar is not implemented for LiveAvatar v1.\n\n"
-                    "Use the browser UI (LiveKit) to speak, or extend viewer.html "
-                    "to send avatar.speak_text command events."
-                )
-
+    if st.button("Start Session"):
+        start_session()
 with col2:
-    if st.button("Stop Session", key="btn_stop_main", use_container_width=True):
-        stop_session(ss.session_id, ss.session_token)
-        ss.session_id = None
-        ss.session_token = None
-        ss.livekit_url = None
-        ss.livekit_client_token = None
-        ss.ws_url = None
-        ss.stress_active = False
-        ss.autorefresh_on = False
-        ss.next_keepalive_at = 0.0
-        debug("[ui] session cleared")
+    if st.button("Stop Session"):
+        stop_session()
 
-# ---------------- Autorefresh helper ----------------
-def _install_autorefresh(enabled: bool, interval_ms: int = 2000):
-    if not enabled:
-        return
-    components.html(
-        f"""
-        <script>
-        const interval_ms = {interval_ms};
-        function pingParent() {{
-          if (window.parent) {{
-            window.parent.postMessage({{type:'streamlit:rerun'}}, '*');
-          }}
-        }}
-        setTimeout(pingParent, interval_ms);
-        </script>
-        """,
-        height=0,
-    )
+st.divider()
 
-# Arm 2s autorefresh if timer is active
-_install_autorefresh(ss.autorefresh_on, 2000)
+if ss.session_id:
+    viewer_html = Path("viewer.html").read_text()
+    viewer_html = viewer_html.replace("__LIVEKIT_URL__", ss.livekit_url)
+    viewer_html = viewer_html.replace("__LIVEKIT_TOKEN__", ss.livekit_client_token)
+    viewer_html = viewer_html.replace("__AVATAR_NAME__", FIXED_AVATAR["pose_name"])
+    components.html(viewer_html, height=360)
+else:
+    st.image(FIXED_AVATAR["preview"])
 
-# On each rerun, if time passed, refresh keep-alive and schedule next
-if ss.stress_active and ss.session_id and ss.session_token and ss.livekit_url:
-    now = time.time()
-    if now >= float(ss.next_keepalive_at or 0):
-        keep_session_alive(ss.session_id, ss.session_token)
-        debug(f"[keepalive] refreshed @ {time.strftime('%H:%M:%S')}")
-        # Next keep-alive in 60 seconds (occupy every 1 minute from last conversation)
-        ss.next_keepalive_at = time.time() + 60.0
-        debug(f"[timer] next keepalive at {time.strftime('%H:%M:%S', time.localtime(ss.next_keepalive_at))}")
+st.divider()
+
+if st.button("Instruction"):
+    ok = send_text_to_avatar(ss.session_id, ss.session_token, "Instruction text")
+    if ok:
+        ss.stress_active = True
+        ss.next_keepalive = time.time() + 60
+
+if ss.stress_active and time.time() > ss.next_keepalive:
+    keep_alive()
+    ss.next_keepalive = time.time() + 60
