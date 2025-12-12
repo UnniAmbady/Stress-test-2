@@ -177,8 +177,11 @@ def create_session_token_full(avatar_id: str, voice_id: Optional[str] = None, la
     }
     status, body = _post_xapi(API_SESS_TOKEN, payload)
     data = body or {}
-    sid = data.get("session_id")
-    session_token = data.get("session_token")
+    #sid = data.get("session_id")
+    #session_token = data.get("session_token")
+    sid = resp["data"]["session_id"]
+    session_token = resp["data"]["session_token"]
+    
     if not sid or not session_token:
         raise RuntimeError(f"Missing session_id/session_token in response: {body}")
     return {"session_id": sid, "session_token": session_token}
