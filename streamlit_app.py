@@ -203,7 +203,7 @@ with left:
                 .replace("__SPEAK_PAYLOAD_JSON__", json.dumps(speak_payload)))
 
         # key changes when nonce changes -> forces iframe refresh
-        components.html(html, height=560, scrolling=False, key=f"viewer_{ss.speak_nonce}")
+        components.html(html, height=560, scrolling=False")
     else:
         st.image(FIXED_AVATAR["preview_url"], caption="Preview (no active session)")
 
