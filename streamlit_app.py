@@ -350,7 +350,11 @@ with st.sidebar:
         st.markdown("#### Session")
         if st.button("Start session", key="sb_start_session", use_container_width=True):
             try:
-                created = start_liveavatar_session(FIXED_AVATAR["avatar_id"], FIXED_AVATAR.get("default_voice"))
+                created = start_liveavatar_session(
+                            FIXED_AVATAR["avatar_id"],
+                            FIXED_AVATAR.get("default_voice"),
+                            LIVEAVATAR_CONTEXT_ID,  )
+
                 ss.session_id            = created["session_id"]
                 ss.session_token         = created["session_token"]
                 ss.livekit_url           = created["livekit_url"]
