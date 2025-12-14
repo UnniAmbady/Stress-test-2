@@ -1,3 +1,5 @@
+# Revision 3.3
+
 import json
 import time
 from pathlib import Path
@@ -34,15 +36,52 @@ EP_SESS_START = f"{BASE}/sessions/start"
 EP_SESS_STOP = f"{BASE}/sessions/stop"
 EP_SESS_KEEPALIVE = f"{BASE}/sessions/keep-alive"
 
+
+# ---------------- Logging ----------------
+def log(msg: str):
+    # Streamlit Cloud captures stdout; keep messages compact.
+    ts = time.strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}", flush=True)
+
+
+def _summarize_json(obj):
+    if not isinstance(obj, dict):
+        return f"type={type(obj).__name__}"
+    keys = list(obj.keys())
+    data = obj.get("data")
+    data_keys = list(data.keys()) if isinstance(data, dict) else None
+    return f"keys={keys}, data_keys={data_keys}"
+
+
+def _safe_excerpt(text: str, max_len: int = 400):
+    if text is None:
+        return ""
+    text = str(text)
+    return text[:max_len] + ("…" if len(text) > max_len else "")
+
+
 def _post_xapi(url: str, payload: dict, timeout: int = 60) -> dict:
     headers = {
         "accept": "application/json",
         "content-type": "application/json",
         "X-API-KEY": HEYGEN_API_KEY,
     }
-    r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    log(f"POST X-API-KEY {url}")
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        log(f"  status={r.status_code}")
+        r.raise_for_status()
+        body = r.json()
+        log(f"  resp {_summarize_json(body)}")
+        return body
+    except requests.HTTPError:
+        # print response body excerpt for fast diagnosis
+        log(f"  HTTPError body={_safe_excerpt(getattr(r, 'text', ''))}")
+        raise
+    except Exception as e:
+        log(f"  EXCEPTION {type(e).__name__}: {e}")
+        raise
+
 
 def _post_bearer(url: str, token: str, payload: dict, timeout: int = 60) -> dict:
     headers = {
@@ -50,9 +89,21 @@ def _post_bearer(url: str, token: str, payload: dict, timeout: int = 60) -> dict
         "content-type": "application/json",
         "Authorization": f"Bearer {token}",
     }
-    r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
+    log(f"POST Bearer {url} (token_len={len(token)})")
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        log(f"  status={r.status_code}")
+        r.raise_for_status()
+        body = r.json()
+        log(f"  resp {_summarize_json(body)}")
+        return body
+    except requests.HTTPError:
+        log(f"  HTTPError body={_safe_excerpt(getattr(r, 'text', ''))}")
+        raise
+    except Exception as e:
+        log(f"  EXCEPTION {type(e).__name__}: {e}")
+        raise
+
 
 def create_session_token_full(avatar_id: str, voice_id: str, context_id: str, language: str = "en") -> dict:
     payload = {
@@ -64,13 +115,16 @@ def create_session_token_full(avatar_id: str, voice_id: str, context_id: str, la
             "language": language,
         },
     }
+    log(f"create_session_token_full avatar_id={avatar_id} voice_id={voice_id} context_id={context_id}")
     body = _post_xapi(EP_SESS_TOKEN, payload)
     data = (body or {}).get("data", body or {})
     sid = data.get("session_id")
     stok = data.get("session_token")
+    log(f"  token_result sid_present={bool(sid)} session_token_len={(len(stok) if stok else 0)}")
     if not sid or not stok:
         raise RuntimeError(f"Missing session_id/session_token in response: {body}")
     return {"session_id": sid, "session_token": stok}
+
 
 def start_session_full() -> dict:
     created = create_session_token_full(
@@ -87,6 +141,11 @@ def start_session_full() -> dict:
 
     lk_url = data.get("livekit_url")
     lk_token = data.get("livekit_client_token")
+
+    log(f"start_session_full sid={sid}")
+    log(f"  livekit_url={lk_url}")
+    log(f"  livekit_client_token_len={(len(lk_token) if lk_token else 0)}")
+
     if not lk_url or not lk_token:
         raise RuntimeError(f"Missing LiveKit connection info from /sessions/start: {body}")
 
@@ -97,11 +156,16 @@ def start_session_full() -> dict:
         "livekit_client_token": lk_token,
     }
 
+
 def stop_session_full(session_id: str, session_token: str) -> None:
+    log(f"stop_session_full sid={session_id}")
     _post_bearer(EP_SESS_STOP, session_token, {"session_id": session_id})
 
+
 def keepalive(session_id: str, session_token: str) -> None:
+    log(f"keepalive sid={session_id}")
     _post_bearer(EP_SESS_KEEPALIVE, session_token, {"session_id": session_id})
+
 
 # ---------------- Session state ----------------
 ss = st.session_state
@@ -115,8 +179,8 @@ speech_path = Path("Speech.txt")
 if speech_path.exists():
     try:
         default_speech = speech_path.read_text(encoding="utf-8")
-    except Exception:
-        pass
+    except Exception as e:
+        log(f"Speech.txt read failed: {e}")
 
 # ---------------- UI ----------------
 st.title("Avatharam 3.0 – LiveAvatar")
@@ -135,6 +199,7 @@ with st.sidebar:
             except Exception as e:
                 ss.live_session = None
                 ss.last_error = f"Failed to start session: {e}"
+                log(ss.last_error)
 
     with colB:
         if st.button("Stop session", use_container_width=True):
@@ -145,6 +210,7 @@ with st.sidebar:
                 ss.live_session = None
             except Exception as e:
                 ss.last_error = f"Failed to stop session: {e}"
+                log(ss.last_error)
 
     if ss.live_session:
         st.success("Session started.")
@@ -154,6 +220,7 @@ with st.sidebar:
                 st.info("Keep-alive sent.")
             except Exception as e:
                 ss.last_error = f"Keep-alive failed: {e}"
+                log(ss.last_error)
     else:
         st.warning("No active session.")
 
@@ -172,7 +239,8 @@ with st.sidebar:
 
     speak_clicked = st.button("Speak now", type="primary", use_container_width=True)
     if speak_clicked:
-        ss.speak_nonce += 1  # forces a new speak request on next render
+        ss.speak_nonce += 1  # triggers a new speak request in the viewer
+        log(f"Speak clicked; nonce={ss.speak_nonce}")
 
     if ss.last_error:
         st.error(ss.last_error)
@@ -183,27 +251,40 @@ left, right = st.columns([1, 1], gap="large")
 with left:
     st.subheader("Avatar")
     if ss.live_session:
-        # Render viewer with LiveKit URL + token + speak request payload
-        viewer_template = Path("viewer.html").read_text(encoding="utf-8")
+        viewer_path = Path("viewer.html")
+        if not viewer_path.exists():
+            ss.last_error = "viewer.html not found in app root."
+            st.error(ss.last_error)
+            log(ss.last_error)
+        else:
+            try:
+                viewer_template = viewer_path.read_text(encoding="utf-8")
+                log(f"viewer.html loaded bytes={len(viewer_template)}")
 
-        speak_payload = {
-            "nonce": ss.speak_nonce,
-            "auto": bool(auto_speak_on_connect),
-            "stress": bool(stress_mode),
-            "interval_ms": int(interval_s * 1000),
-            "repeat": int(repeat_n),
-            "text": instruction_text.strip(),
-        }
+                speak_payload = {
+                    "nonce": ss.speak_nonce,
+                    "auto": bool(auto_speak_on_connect),
+                    "stress": bool(stress_mode),
+                    "interval_ms": int(interval_s * 1000),
+                    "repeat": int(repeat_n),
+                    "text": instruction_text.strip(),
+                }
+                log(f"speak_payload nonce={speak_payload['nonce']} auto={speak_payload['auto']} "
+                    f"stress={speak_payload['stress']} interval_ms={speak_payload['interval_ms']} "
+                    f"repeat={speak_payload['repeat']} text_len={len(speak_payload['text'])}")
 
-        # Replace placeholders
-        html = (viewer_template
-                .replace("__LIVEKIT_URL__", ss.live_session["livekit_url"])
-                .replace("__LIVEKIT_TOKEN__", ss.live_session["livekit_client_token"])
-                .replace("__AVATAR_NAME__", FIXED_AVATAR["name"])
-                .replace("__SPEAK_PAYLOAD_JSON__", json.dumps(speak_payload)))
+                html = (viewer_template
+                        .replace("__LIVEKIT_URL__", ss.live_session["livekit_url"])
+                        .replace("__LIVEKIT_TOKEN__", ss.live_session["livekit_client_token"])
+                        .replace("__AVATAR_NAME__", FIXED_AVATAR["name"])
+                        .replace("__SPEAK_PAYLOAD_JSON__", json.dumps(speak_payload)))
 
-        # key changes when nonce changes -> forces iframe refresh
-        components.html(html, height=560, scrolling=False)
+                # IMPORTANT: components.html does NOT accept key=
+                components.html(html, height=560, scrolling=False)
+            except Exception as e:
+                ss.last_error = f"Viewer render failed: {e}"
+                st.error(ss.last_error)
+                log(ss.last_error)
     else:
         st.image(FIXED_AVATAR["preview_url"], caption="Preview (no active session)")
 
@@ -215,9 +296,10 @@ with right:
 - Session lifecycle is handled by REST (`/sessions/token`, `/sessions/start`, `/sessions/stop`, `/keep-alive`).
 - **Speech is triggered in the browser** via LiveKit **Command Events**, e.g. `avatar.speak_text`.
 
-**This app intentionally does NOT publish your camera/mic**
-- The viewer joins LiveKit **without** enabling camera/mic, so your video should not appear and you should not be prompted for permissions.
-- The viewer only subscribes to the remote avatar video/audio tracks and sends command events over the data channel.
+**If you see “LiveKitClient not loaded”**
+- The LiveKit JavaScript library failed to load in the iframe.
+- This is usually a `viewer.html` script URL / module type / CDN issue.
+- Open browser DevTools → Console + Network to confirm the livekit script loads (HTTP 200).
         """
     )
 
@@ -226,6 +308,7 @@ with right:
             {
                 "session_id": ss.live_session["session_id"],
                 "livekit_url": ss.live_session["livekit_url"],
+                "livekit_client_token_len": len(ss.live_session["livekit_client_token"]),
                 "avatar": FIXED_AVATAR["name"],
             }
         )
