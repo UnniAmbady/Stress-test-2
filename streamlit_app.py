@@ -1,305 +1,195 @@
 import json
 import time
-from pathlib import Path
-
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
-# =========================================================
-# Avatharam 3.0 – LiveAvatar (FULL mode)
-# - Session lifecycle via LiveAvatar REST (HTTP)
-# - Speech + mic publishing via LiveKit in viewer.html (browser-side)
-# - When "Speak" is pressed (viewer side):
-#     avatar.interrupt -> wait 500ms -> avatar.speak_text
-# =========================================================
-
 st.set_page_config(page_title="Avatharam 3.0 – LiveAvatar", layout="wide")
 
-# ---------------- Secrets (exact casing/spelling) ----------------
-HEYGEN_API_KEY = st.secrets["HeyGen"]["heygen_api_key"]
-LIVEAVATAR_CONTEXT_ID = st.secrets["LiveAvatar"]["context_id"]
+API_BASE = "https://api.liveavatar.com/v1"
+API_TOKEN = f"{API_BASE}/sessions/token"
+API_START = f"{API_BASE}/sessions/start"
+API_STOP = f"{API_BASE}/sessions/stop"
+API_KEEPALIVE = f"{API_BASE}/sessions/keep-alive"
 
-# ---------------- Fixed Avatar (June HR) ----------------
-FIXED_AVATAR = {
-    "avatar_id": "65f9e3c9-d48b-4118-b73a-4ae2e3cbb8f0",
-    "voice_id": "62bbb4b2-bb26-4727-bc87-cfb2bd4e0cc8",
-    "name": "June HR",
-    "preview_url": "https://files2.heygen.ai/avatar/v3/74447a27859a456c955e01f21ef18216_45620/preview_talk_1.webp",
-}
-
-# ---------------- LiveAvatar REST endpoints ----------------
-BASE = "https://api.liveavatar.com/v1"
-EP_SESS_TOKEN = f"{BASE}/sessions/token"
-EP_SESS_START = f"{BASE}/sessions/start"
-EP_SESS_STOP = f"{BASE}/sessions/stop"
-EP_SESS_KEEPALIVE = f"{BASE}/sessions/keep-alive"
-
-# ---------------- Simple in-app logger ----------------
-def _log(msg: str) -> None:
-    ts = time.strftime("%H:%M:%S")
-    st.session_state.logs.append(f"[{ts}] {msg}")
-
-def _http_post_xapi(url: str, payload: dict, timeout: int = 60) -> dict:
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "X-API-KEY": HEYGEN_API_KEY,
-    }
-    _log(f"POST {url} payload_keys={list(payload.keys())}")
-    r = requests.post(url, headers=headers, json=payload, timeout=timeout)
-    _log(f"HTTP {r.status_code} from {url}")
-    # Keep body small in logs to avoid Streamlit redaction issues
-    try:
-        data = r.json()
-    except Exception:
-        data = {"raw": r.text[:500]}
-    if not r.ok:
-        _log(f"ERROR body: {str(data)[:800]}")
-        r.raise_for_status()
-    return data
-
-def create_session_token_full_mode() -> dict:
-    payload = {
-        "mode": "FULL",
-        "avatar_id": FIXED_AVATAR["avatar_id"],
-        "avatar_persona": {
-            "voice_id": FIXED_AVATAR["voice_id"],
-            "context_id": LIVEAVATAR_CONTEXT_ID,
-            "language": "en",
-        },
-    }
-    body = _http_post_xapi(EP_SESS_TOKEN, payload)
-    # New API shape: {code, data:{session_id, session_token}, message}
-    data = body.get("data") or {}
-    sid = data.get("session_id")
-    stok = data.get("session_token")
-    if not sid or not stok:
-        raise RuntimeError(f"Missing session_id/session_token in response: {body}")
-    return {"session_id": sid, "session_token": stok, "raw": body}
-
-def start_session(session_id: str, session_token: str) -> dict:
-    # New API: uses Bearer session_token
-    payload = {"session_id": session_id}
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "Authorization": f"Bearer {session_token}",
-    }
-    _log(f"POST {EP_SESS_START} (Bearer) session_id={session_id}")
-    r = requests.post(EP_SESS_START, headers=headers, json=payload, timeout=60)
-    _log(f"HTTP {r.status_code} from /sessions/start")
-    body = r.json() if r.content else {}
-    if not r.ok:
-        _log(f"ERROR body: {str(body)[:800]}")
-        r.raise_for_status()
-
-    data = body.get("data") or {}
-    livekit_url = data.get("livekit_url")
-    livekit_client_token = data.get("livekit_client_token")
-    if not livekit_url or not livekit_client_token:
-        raise RuntimeError(f"Missing LiveKit connection info from /sessions/start: {body}")
-
+def _headers(api_key: str) -> dict:
     return {
-        "session_id": data.get("session_id", session_id),
-        "livekit_url": livekit_url,
-        "livekit_client_token": livekit_client_token,
-        "max_session_duration": data.get("max_session_duration"),
-        "raw": body,
-    }
-
-def stop_session(session_id: str, session_token: str) -> dict:
-    payload = {"session_id": session_id}
-    headers = {
         "accept": "application/json",
         "content-type": "application/json",
-        "Authorization": f"Bearer {session_token}",
+        "X-API-KEY": api_key,
     }
-    _log(f"POST {EP_SESS_STOP} (Bearer) session_id={session_id}")
-    r = requests.post(EP_SESS_STOP, headers=headers, json=payload, timeout=60)
-    _log(f"HTTP {r.status_code} from /sessions/stop")
-    body = r.json() if r.content else {}
-    if not r.ok:
-        _log(f"ERROR body: {str(body)[:800]}")
-    return body
 
-def keep_alive(session_id: str, session_token: str) -> dict:
-    payload = {"session_id": session_id}
-    headers = {
-        "accept": "application/json",
-        "content-type": "application/json",
-        "Authorization": f"Bearer {session_token}",
-    }
-    _log(f"POST {EP_SESS_KEEPALIVE} (Bearer) session_id={session_id}")
-    r = requests.post(EP_SESS_KEEPALIVE, headers=headers, json=payload, timeout=60)
-    _log(f"HTTP {r.status_code} from /sessions/keep-alive")
-    body = r.json() if r.content else {}
-    if not r.ok:
-        _log(f"ERROR body: {str(body)[:800]}")
-    return body
+def post_json(url: str, api_key: str, payload: dict) -> dict:
+    r = requests.post(url, headers=_headers(api_key), json=payload, timeout=30)
+    r.raise_for_status()
+    return r.json()
 
-# ---------------- Session state ----------------
+def build_viewer_html(template_path: str, avatar_name: str, livekit_url: str, livekit_token: str, speak_text: str, nonce: int) -> str:
+    with open(template_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    payload = {"text": speak_text, "nonce": nonce}
+    html = html.replace("__AVATAR_NAME__", avatar_name)
+    html = html.replace("__LIVEKIT_URL__", livekit_url)
+    html = html.replace("__LIVEKIT_TOKEN__", livekit_token)
+    html = html.replace("__SPEAK_PAYLOAD_JSON__", json.dumps(payload))
+    return html
+
+# ---- Secrets ----
+heygen_api_key = st.secrets.get("HeyGen", {}).get("heygen_api_key", "")
+context_id = st.secrets.get("LiveAvatar", {}).get("context_id", "")
+
+# ---- Session state ----
 ss = st.session_state
-ss.setdefault("live_session", None)  # dict with session_id/session_token/livekit_url/livekit_client_token
-ss.setdefault("last_error", "")
-ss.setdefault("speak_nonce", 0)
-ss.setdefault("logs", [])
-ss.setdefault("keepalive_last", None)
+ss.setdefault("session_id", None)
+ss.setdefault("session_token", None)
+ss.setdefault("livekit_url", None)
+ss.setdefault("livekit_token", None)
+ss.setdefault("avatar_name", "June HR")
+ss.setdefault("last_start_resp", None)
+ss.setdefault("last_keepalive_resp", None)
+ss.setdefault("nonce", 0)
 
-# ---------------- Load editable speech text (optional) ----------------
-default_speech = "Hello"
-speech_path = Path("Speech.txt")
-if speech_path.exists():
-    try:
-        default_speech = speech_path.read_text(encoding="utf-8").strip() or default_speech
-    except Exception:
-        pass
+# ---- UI ----
+st.title("Avatharam 3.0 – LiveAvatar")
+st.caption("Stress-test harness for HeyGen LiveAvatar Sessions API (FULL mode) with LiveKit command events + mic publish.")
 
-# ---------------- Sidebar ----------------
 with st.sidebar:
-    st.markdown("## Avatharam Control Panel")
+    st.header("Avatharam Control Panel")
 
-    st.markdown("### Session")
-    colA, colB = st.columns(2)
-    start_clicked = colA.button("Start session", use_container_width=True)
-    stop_clicked = colB.button("Stop session", use_container_width=True)
-    keep_clicked = st.button("Keep-alive ping", use_container_width=True)
+    if not heygen_api_key:
+        st.error("Missing [HeyGen].heygen_api_key in Streamlit secrets.")
+    if not context_id:
+        st.warning("Missing [LiveAvatar].context_id in Streamlit secrets.")
 
-    st.markdown("### Instruction text")
-    speech_text = st.text_area(
-        "Speech.txt content (editable)",
-        value=default_speech,
-        height=120,
-    )
+    st.subheader("Session")
 
-    st.markdown("### Speak")
-    st.caption("This triggers the viewer-side Speak button flow: interrupt → 500ms → speak_text")
-    speak_clicked = st.button("Send text to avatar", type="primary", use_container_width=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        start_btn = st.button("Start session", use_container_width=True)
+    with col2:
+        stop_btn = st.button("Stop session", use_container_width=True)
 
-    st.markdown("### Debug")
-    show_debug = st.checkbox("Show debug logs", value=True)
+    keep_btn = st.button("Keep-alive ping", use_container_width=True)
 
-    if ss.last_error:
-        st.error(ss.last_error)
+    st.subheader("Instruction text")
+    speak_text = st.text_area("Speech.txt content (editable)", value="Hello", height=120)
 
-# ---------------- Actions ----------------
-def _clear_error():
-    ss.last_error = ""
+    st.subheader("Debug")
+    st.write("**context_id**:", context_id)
+    st.write("**session_id**:", ss.session_id)
+    st.write("**nonce**:", ss.nonce)
 
-if start_clicked:
-    _clear_error()
+    if ss.last_start_resp:
+        st.write("**Last /sessions/start response:**")
+        st.code(json.dumps(ss.last_start_resp, indent=2), language="json")
+
+    if ss.last_keepalive_resp:
+        st.write("**Last /keep-alive response:**")
+        st.code(json.dumps(ss.last_keepalive_resp, indent=2), language="json")
+
+# ---- Actions ----
+if start_btn and heygen_api_key:
     try:
-        _log("Start session clicked.")
-        token_info = create_session_token_full_mode()
-        sid = token_info["session_id"]
-        stok = token_info["session_token"]
+        token_resp = post_json(API_TOKEN, heygen_api_key, {"mode": "FULL"})
+        data = token_resp.get("data", {})
+        ss.session_id = data.get("session_id")
+        ss.session_token = data.get("session_token")
 
-        sess = start_session(sid, stok)
-        sess["session_token"] = stok  # keep bearer for stop/keepalive
-        ss.live_session = sess
-        _log("Session started successfully.")
+        if not ss.session_id or not ss.session_token:
+            st.error(f"Token response missing session_id/session_token: {token_resp}")
+        else:
+            start_payload = {
+                "session_id": ss.session_id,
+                "session_token": ss.session_token,
+                "start_session_data": {
+                    "mode": "FULL",
+                    "avatar_id": "65f9e3c9-d48b-4118-b73a-4ae2e3cbb8f0",  # June HR
+                    "avatar_persona": {
+                        "context_id": context_id,
+                        "language": "en",
+                    }
+                }
+            }
+            start_resp = post_json(API_START, heygen_api_key, start_payload)
+            ss.last_start_resp = start_resp
+
+            sdata = start_resp.get("data", {})
+            ss.livekit_url = sdata.get("livekit_url")
+            ss.livekit_token = sdata.get("livekit_client_token")
+            ss.avatar_name = "June HR"
+
+            if not ss.livekit_url or not ss.livekit_token:
+                st.error(f"Missing livekit_url/livekit_client_token in start response: {start_resp}")
+            else:
+                st.success("Session started.")
+                ss.nonce = 0  # viewer will boot with nonce 0
+
+    except requests.HTTPError as e:
+        st.error(f"Failed to start session: {e}")
     except Exception as e:
-        ss.last_error = f"Failed to start session: {e}"
-        _log(ss.last_error)
+        st.error(f"Unexpected error: {e}")
 
-if stop_clicked:
-    _clear_error()
+if keep_btn and heygen_api_key and ss.session_id and ss.session_token:
     try:
-        if not ss.live_session:
-            raise RuntimeError("No active session.")
-        _log("Stop session clicked.")
-        body = stop_session(ss.live_session["session_id"], ss.live_session["session_token"])
-        ss.live_session = None
-        _log(f"Session stopped. resp_code={body.get('code')}")
+        keep_payload = {"session_id": ss.session_id, "session_token": ss.session_token}
+        keep_resp = post_json(API_KEEPALIVE, heygen_api_key, keep_payload)
+        ss.last_keepalive_resp = keep_resp
+        st.info("Keep-alive sent.")
     except Exception as e:
-        ss.last_error = f"Failed to stop session: {e}"
-        _log(ss.last_error)
+        st.error(f"Keep-alive failed: {e}")
 
-if keep_clicked:
-    _clear_error()
+if stop_btn and heygen_api_key and ss.session_id and ss.session_token:
     try:
-        if not ss.live_session:
-            raise RuntimeError("No active session.")
-        body = keep_alive(ss.live_session["session_id"], ss.live_session["session_token"])
-        ss.keepalive_last = body
-        _log(f"Keep-alive response: code={body.get('code')} message={body.get('message')}")
+        stop_payload = {"session_id": ss.session_id, "session_token": ss.session_token}
+        stop_resp = post_json(API_STOP, heygen_api_key, stop_payload)
+        st.info(f"Stop response: {stop_resp}")
+        ss.session_id = None
+        ss.session_token = None
+        ss.livekit_url = None
+        ss.livekit_token = None
+        ss.last_start_resp = None
+        ss.last_keepalive_resp = None
+        ss.nonce = 0
     except Exception as e:
-        ss.last_error = f"Keep-alive failed: {e}"
-        _log(ss.last_error)
+        st.error(f"Stop failed: {e}")
 
-if speak_clicked:
-    # We "signal" viewer by bumping nonce; viewer reads payload and triggers speak flow.
-    ss.speak_nonce += 1
-    _log(f"Send-text clicked. nonce={ss.speak_nonce} chars={len(speech_text)}")
-
-# ---------------- Main layout ----------------
-left, right = st.columns([1.2, 1.0], gap="large")
+# ---- Main viewer area ----
+left, right = st.columns([2, 1])
 
 with left:
-    st.title("Avatharam 3.0 – LiveAvatar")
-    st.caption("Stress-test harness for HeyGen LiveAvatar Sessions API (FULL mode) with LiveKit command events.")
-
-    # Session status
-    if ss.live_session:
-        st.success("Session started.")
-        st.json(
-            {
-                "session_id": ss.live_session["session_id"],
-                "livekit_url": ss.live_session["livekit_url"],
-                "avatar": FIXED_AVATAR["name"],
-                "context_id": LIVEAVATAR_CONTEXT_ID,
-            }
+    st.subheader("Avatar")
+    if ss.livekit_url and ss.livekit_token:
+        # bump nonce on every rerun when text changes, to force iframe refresh without using components.html(key=...)
+        # (Streamlit 1.38 IframeMixin._html() does not accept key)
+        ss.nonce += 1
+        html = build_viewer_html(
+            template_path="viewer.html",
+            avatar_name=ss.avatar_name,
+            livekit_url=ss.livekit_url,
+            livekit_token=ss.livekit_token,
+            speak_text=speak_text,
+            nonce=ss.nonce,
         )
-        if ss.keepalive_last:
-            st.markdown("**Last keep-alive response**")
-            st.json(ss.keepalive_last)
-
-        # Render viewer
-        viewer_path = Path("viewer.html")
-        if not viewer_path.exists():
-            st.error("viewer.html not found in project root.")
-        else:
-            tmpl = viewer_path.read_text(encoding="utf-8")
-            # Inject runtime values
-            payload = {
-                "nonce": ss.speak_nonce,
-                "text": speech_text,
-                "interrupt_before_speak": True,
-                "interrupt_delay_ms": 500,
-                "publish_microphone": True,
-            }
-            html = (
-                tmpl.replace("__AVATAR_NAME__", FIXED_AVATAR["name"])
-                .replace("__LIVEKIT_URL__", ss.live_session["livekit_url"])
-                .replace("__LIVEKIT_TOKEN__", ss.live_session["livekit_client_token"])
-                .replace("__PAYLOAD_JSON__", json.dumps(payload))
-            )
-            # IMPORTANT: streamlit.components.html does NOT accept key= in some versions.
-            components.html(html, height=620, scrolling=False)
-
+        components.html(html, height=590, scrolling=False)
     else:
-        st.info("No active session. Use the sidebar to start one.")
-        st.image(FIXED_AVATAR["preview_url"], caption="Preview (no active session)")
+        st.warning("Start a session first.")
 
 with right:
-    st.subheader("Notes / Debug")
+    st.subheader("Notes")
     st.markdown(
         """
-**How this works**
-- Session lifecycle is handled by REST (`/sessions/token`, `/sessions/start`, `/sessions/stop`, `/sessions/keep-alive`).
-- The browser viewer connects to LiveKit using `livekit_url` + `livekit_client_token`.
-- The viewer **publishes microphone audio** (no camera), so you can talk and trigger the agent.
-- When you press **Speak** (or when Streamlit triggers a nonce update), the viewer sends:
-  1) `avatar.interrupt`
-  2) waits 500 ms
-  3) sends `avatar.speak_text` with your text
-
-**Why we do this**
-- We are testing whether `avatar.interrupt` changes agent state enough to accept `avatar.speak_text`.
-- Even if the avatar does not speak, these logs are valuable for HeyGen support.
-        """
+**What this build does**
+- Starts LiveAvatar FULL session via REST.
+- Viewer connects via LiveKit and **shows avatar video/audio**.
+- Viewer has **Enable Mic** (publishes your microphone audio).
+- Viewer **Speak** button sends: `avatar.interrupt` → wait 500ms → `avatar.speak_text`.
+- Viewer logs:
+  - SDK discovery
+  - TrackSubscribed (video/audio)
+  - DataReceived events
+  - Mic publish status
+  - Command sends
+"""
     )
 
-    if show_debug:
-        st.markdown("**App logs**")
-        st.text_area("logs", value="\n".join(ss.logs[-300:]), height=320)
