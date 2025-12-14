@@ -5,83 +5,27 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>__AVATAR_NAME__ · Live session</title>
 
-  <!-- ✅ REQUIRED BY YOU: keep this exact line in viewer.html -->
+  <!-- REQUIRED LINE (kept exactly as requested) -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.15.7/livekit-client.umd.min.js"></script>
 
   <style>
-    :root {
-      --bg: #0b0b0b;
-      --panel: rgba(0,0,0,.55);
-      --text: rgba(255,255,255,.92);
-      --muted: rgba(255,255,255,.65);
-      --accent: #a4ffce;
-      --danger: #ff6b6b;
-      --warn: #ffd166;
-      --radius: 18px;
+    :root{
+      --bg:#0b0b0b;--panel:rgba(0,0,0,.55);--text:rgba(255,255,255,.92);
+      --muted:rgba(255,255,255,.65);--accent:#a4ffce;--danger:#ff6b6b;--warn:#ffd166;
+      --radius:18px
     }
-    html, body { margin: 0; padding: 0; background: transparent; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
-    .frame {
-      background: var(--bg);
-      border-radius: var(--radius);
-      overflow: hidden;
-      position: relative;
-      height: 540px;
-      width: 100%;
-      box-shadow: 0 10px 30px rgba(0,0,0,.35);
-    }
-    .header {
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      padding: 12px 14px;
-      background: linear-gradient(to bottom, rgba(0,0,0,.7), rgba(0,0,0,0));
-      color: var(--text);
-      font-weight: 600;
-      z-index: 5;
-    }
-    .stage { position: absolute; inset: 0; display: grid; place-items: center; }
-    video { width: 100%; height: 100%; object-fit: cover; background: #111; }
-    .overlay {
-      position: absolute;
-      left: 10px; right: 10px; bottom: 10px;
-      background: var(--panel);
-      color: var(--text);
-      border-radius: 14px;
-      padding: 10px 12px;
-      font-size: 12px;
-      line-height: 1.35;
-      z-index: 6;
-    }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .pill {
-      border-radius: 999px;
-      padding: 4px 10px;
-      background: rgba(255,255,255,.08);
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .pill.ok { color: var(--accent); }
-    .pill.warn { color: var(--warn); }
-    .pill.bad { color: var(--danger); }
-    .log {
-      margin-top: 8px;
-      max-height: 110px;
-      overflow: auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      white-space: pre-wrap;
-      color: rgba(255,255,255,.75);
-      font-size: 11px;
-    }
-    .btn {
-      cursor: pointer;
-      border: 0;
-      border-radius: 10px;
-      padding: 7px 10px;
-      background: rgba(255,255,255,.12);
-      color: var(--text);
-      font-weight: 600;
-      font-size: 12px;
-    }
-    .btn:hover { background: rgba(255,255,255,.16); }
+    html,body{margin:0;padding:0;background:transparent;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .frame{background:var(--bg);border-radius:var(--radius);overflow:hidden;position:relative;height:540px;width:100%;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+    .header{position:absolute;top:0;left:0;right:0;padding:12px 14px;background:linear-gradient(to bottom,rgba(0,0,0,.7),rgba(0,0,0,0));color:var(--text);font-weight:600;z-index:5}
+    .stage{position:absolute;inset:0;display:grid;place-items:center}
+    video{width:100%;height:100%;object-fit:cover;background:#111}
+    .overlay{position:absolute;left:10px;right:10px;bottom:10px;background:var(--panel);color:var(--text);border-radius:14px;padding:10px 12px;font-size:12px;line-height:1.35;z-index:6}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .pill{border-radius:999px;padding:4px 10px;background:rgba(255,255,255,.08);color:var(--muted);font-size:12px}
+    .pill.ok{color:var(--accent)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--danger)}
+    .log{margin-top:8px;max-height:120px;overflow:auto;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;color:rgba(255,255,255,.75);font-size:11px}
+    .btn{cursor:pointer;border:0;border-radius:10px;padding:7px 10px;background:rgba(255,255,255,.12);color:var(--text);font-weight:600;font-size:12px}
+    .btn:hover{background:rgba(255,255,255,.16)}
   </style>
 </head>
 
@@ -106,12 +50,10 @@
   </div>
 
   <script>
-    // Injected by Streamlit
     const LIVEKIT_URL = "__LIVEKIT_URL__";
     const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
     const SPEAK_PAYLOAD = __SPEAK_PAYLOAD_JSON__;
 
-    // UI
     const logEl = document.getElementById("log");
     const sdkPill = document.getElementById("sdkPill");
     const connPill = document.getElementById("connPill");
@@ -120,156 +62,165 @@
     const reconnectBtn = document.getElementById("reconnectBtn");
     const speakBtn = document.getElementById("speakBtn");
 
-    function log(msg) {
-      const t = new Date().toISOString().slice(11, 19);
-      logEl.textContent += `[${t}] ${msg}\n`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-    function setPill(el, text, cls) {
-      el.textContent = text;
-      el.className = "pill" + (cls ? " " + cls : "");
+    function log(msg){ const t=new Date().toISOString().slice(11,19); logEl.textContent += `[${t}] ${msg}\n`; logEl.scrollTop = logEl.scrollHeight; }
+    function setPill(el, text, cls){ el.textContent=text; el.className="pill"+(cls?(" "+cls):""); }
+
+    window.addEventListener("error", (e)=>log(`window.onerror: ${e.message}`));
+    window.addEventListener("unhandledrejection",(e)=>log(`unhandledrejection: ${e.reason}`));
+
+    // --- Robust SDK discovery: find a window global that looks like LiveKit (has Room + RoomEvent)
+    function findLiveKitSDK(){
+      // Common guesses first:
+      const guesses = [
+        window.LiveKitClient, window.LiveKit, window.livekit,
+        window.livekitClient, window.Livekit, window.liveKit, window.LiveKitSDK
+      ].filter(Boolean);
+
+      for(const g of guesses){
+        if(g && g.Room && g.RoomEvent) return { sdk: g, name: "guessed" };
+      }
+
+      // Scan all window keys for something that looks like LiveKit
+      const keys = Object.keys(window);
+      const hits = keys.filter(k => /livekit/i.test(k));
+      if(hits.length) log("window keys matching /livekit/i: " + hits.join(", "));
+
+      for(const k of hits){
+        try{
+          const v = window[k];
+          if(v && v.Room && v.RoomEvent) return { sdk: v, name: k };
+        }catch{}
+      }
+
+      // As a final scan, look for ANY object with Room & RoomEvent (rare but helps when names are weird)
+      // Limit scanning to avoid heavy work.
+      for(let i=0;i<keys.length && i<400;i++){
+        const k = keys[i];
+        try{
+          const v = window[k];
+          if(v && v.Room && v.RoomEvent && typeof v.Room === "function") return { sdk: v, name: k };
+        }catch{}
+      }
+
+      return null;
     }
 
-    // Capture errors to on-screen log
-    window.addEventListener("error", (e) => log(`window.onerror: ${e.message}`));
-    window.addEventListener("unhandledrejection", (e) => log(`unhandledrejection: ${e.reason}`));
-
-    // ---- LiveKit global detection (UMD names vary) ----
-    function getLiveKitGlobal() {
-      return window.LiveKitClient || window.LiveKit || window.livekit || null;
-    }
-
-    // ---- Fallback loader (when cdnjs is blocked inside iframe) ----
+    // Fallback CDN loader (in case cdnjs is blocked/slow)
     const FALLBACK_SDK_URLS = [
-      // Same version, UMD builds
       "https://cdn.jsdelivr.net/npm/livekit-client@2.15.7/dist/livekit-client.umd.min.js",
-      "https://unpkg.com/livekit-client@2.15.7/dist/livekit-client.umd.min.js",
+      "https://unpkg.com/livekit-client@2.15.7/dist/livekit-client.umd.min.js"
     ];
 
-    function loadScript(url) {
-      return new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = url;
-        s.async = true;
-        s.onload = () => resolve(url);
-        s.onerror = () => reject(new Error("Failed to load: " + url));
+    function loadScript(url){
+      return new Promise((resolve, reject)=>{
+        const s=document.createElement("script");
+        s.src=url; s.async=true;
+        s.onload=()=>resolve(url);
+        s.onerror=()=>reject(new Error("Failed to load: "+url));
         document.head.appendChild(s);
       });
     }
 
-    async function ensureLiveKitSDK() {
-      // 1) First check if cdnjs already provided it
-      const g0 = getLiveKitGlobal();
-      if (g0) {
+    async function ensureSDK(){
+      // Try immediately (cdnjs may have already executed)
+      let found = findLiveKitSDK();
+      if(found){
         setPill(sdkPill, "SDK: loaded", "ok");
-        log("LiveKit SDK detected from initial script tag.");
-        return g0;
+        log("LiveKit SDK found via " + found.name);
+        return found.sdk;
       }
 
-      // 2) Wait a moment (sometimes the CDN script loads late)
       setPill(sdkPill, "SDK: waiting…", "warn");
-      log("LiveKit SDK not found yet. Waiting 1s…");
-      await new Promise(r => setTimeout(r, 1000));
+      log("SDK not detected. Waiting 1s for initial script…");
+      await new Promise(r=>setTimeout(r, 1000));
 
-      const g1 = getLiveKitGlobal();
-      if (g1) {
+      found = findLiveKitSDK();
+      if(found){
         setPill(sdkPill, "SDK: loaded", "ok");
-        log("LiveKit SDK detected after delay.");
-        return g1;
+        log("LiveKit SDK found after delay via " + found.name);
+        return found.sdk;
       }
 
-      // 3) Try alternate CDNs
-      log("Trying fallback CDNs (cdnjs may be blocked inside Streamlit iframe)…");
-      for (const url of FALLBACK_SDK_URLS) {
-        try {
+      log("Trying fallback CDNs…");
+      for(const url of FALLBACK_SDK_URLS){
+        try{
           log("Loading SDK: " + url);
           await loadScript(url);
-          const g = getLiveKitGlobal();
-          if (g) {
+          found = findLiveKitSDK();
+          if(found){
             setPill(sdkPill, "SDK: loaded", "ok");
-            log("LiveKit SDK loaded from: " + url);
-            return g;
-          } else {
-            log("Loaded script but no LiveKit global found (unexpected).");
+            log("LiveKit SDK loaded from fallback and found via " + found.name);
+            return found.sdk;
+          }else{
+            log("Loaded fallback script, but SDK still not detected (global name differs or script blocked).");
           }
-        } catch (e) {
+        }catch(e){
           log(String(e));
         }
       }
 
-      // 4) Still missing → likely blocked by CSP/sandbox/network
       setPill(sdkPill, "SDK: blocked", "bad");
-      log("LiveKit SDK still missing after fallbacks.");
-      log("Most likely causes:");
-      log(" - Streamlit iframe / CSP blocks external scripts");
-      log(" - Network blocks cdnjs/jsdelivr/unpkg");
-      log("Action: open DevTools → Network, confirm livekit-client.umd.min.js requests are allowed.");
+      log("SDK still missing after fallbacks. Likely blocked by CSP/sandbox/network.");
       return null;
     }
 
-    // ---- LiveKit room logic (no mic/camera publishing) ----
+    // ---- LiveKit room (no local media publishing) ----
     let room = null;
     let remoteVideoTrack = null;
     let remoteAudioTracks = [];
 
-    function detachAll() {
-      try {
-        if (remoteVideoTrack) {
-          remoteVideoTrack.detach(videoEl);
-          remoteVideoTrack = null;
-        }
-        remoteAudioTracks.forEach(t => {
-          try {
-            t.__audioEl && t.detach(t.__audioEl);
-            t.__audioEl && t.__audioEl.remove();
-          } catch {}
+    function detachAll(){
+      try{
+        if(remoteVideoTrack){ remoteVideoTrack.detach(videoEl); remoteVideoTrack=null; }
+        remoteAudioTracks.forEach(t=>{
+          try{ t.__audioEl && t.detach(t.__audioEl); t.__audioEl && t.__audioEl.remove(); }catch{}
         });
-        remoteAudioTracks = [];
-      } catch {}
+        remoteAudioTracks=[];
+      }catch{}
       setPill(trkPill, "Tracks: 0", "");
     }
 
-    async function connectRoom() {
+    async function connectRoom(){
       detachAll();
 
-      const LK = await ensureLiveKitSDK();
-      if (!LK || !LK.Room) {
+      const LK = await ensureSDK();
+      if(!LK || !LK.Room){
         setPill(connPill, "Room: SDK missing", "bad");
         return;
       }
 
-      try {
+      try{
         setPill(connPill, "Room: connecting…", "warn");
-        log("Connecting…");
-        log("LIVEKIT_URL=" + LIVEKIT_URL);
-        log("TOKEN_LEN=" + (LIVEKIT_TOKEN ? LIVEKIT_TOKEN.length : 0));
+        log("Connecting to LiveKit…");
+        log("URL: " + LIVEKIT_URL);
+        log("Token length: " + (LIVEKIT_TOKEN ? LIVEKIT_TOKEN.length : 0));
 
-        room = new LK.Room({ adaptiveStream: true, dynacast: true });
+        room = new LK.Room({ adaptiveStream:true, dynacast:true });
 
-        room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+        room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant)=>{
           log(`TrackSubscribed: kind=${track.kind}, from=${participant.identity}`);
 
-          if (track.kind === "video" && !remoteVideoTrack) {
+          if(track.kind==="video" && !remoteVideoTrack){
             remoteVideoTrack = track;
             track.attach(videoEl);
             log("Attached avatar video.");
           }
-          if (track.kind === "audio") {
-            const a = document.createElement("audio");
-            a.autoplay = true;
-            a.playsInline = true;
+
+          if(track.kind==="audio"){
+            const a=document.createElement("audio");
+            a.autoplay=true; a.playsInline=true;
             document.body.appendChild(a);
             track.attach(a);
-            track.__audioEl = a;
+            track.__audioEl=a;
             remoteAudioTracks.push(track);
             log("Attached avatar audio.");
           }
 
-          const count = (remoteVideoTrack ? 1 : 0) + remoteAudioTracks.length;
+          const count=(remoteVideoTrack?1:0)+remoteAudioTracks.length;
           setPill(trkPill, `Tracks: ${count}`, count ? "ok" : "");
         });
 
-        room.on(LK.RoomEvent.Disconnected, (reason) => {
+        room.on(LK.RoomEvent.Disconnected, (reason)=>{
           setPill(connPill, "Room: disconnected", "bad");
           log("Disconnected: " + reason);
         });
@@ -278,79 +229,71 @@
         setPill(connPill, "Room: connected", "ok");
         log("Connected.");
 
-        // Optional: auto-speak
-        if (SPEAK_PAYLOAD && SPEAK_PAYLOAD.auto) {
+        if(SPEAK_PAYLOAD && SPEAK_PAYLOAD.auto){
           await speakNow();
         }
 
-      } catch (e) {
+      }catch(e){
         setPill(connPill, "Room: error", "bad");
         log("Connect error: " + (e && e.message ? e.message : String(e)));
       }
     }
 
-    function buildSpeakMessage(text) {
-      return {
-        event: "avatar.speak_text",
-        data: { text: text },
-      };
+    function buildSpeakMessage(text){
+      return { event: "avatar.speak_text", data: { text } };
     }
 
-    async function speakNow() {
-      if (!room || !room.localParticipant) {
+    async function speakNow(){
+      if(!room || !room.localParticipant){
         log("Speak blocked: room not connected.");
         return;
       }
       const text = (SPEAK_PAYLOAD && SPEAK_PAYLOAD.text) ? String(SPEAK_PAYLOAD.text) : "";
-      if (!text.trim()) {
+      if(!text.trim()){
         log("Speak blocked: empty text.");
         return;
       }
-      try {
+      try{
         const msg = buildSpeakMessage(text);
         const bytes = new TextEncoder().encode(JSON.stringify(msg));
-        await room.localParticipant.publishData(bytes, { reliable: true });
+        await room.localParticipant.publishData(bytes, { reliable:true });
         log("Command sent: avatar.speak_text (chars=" + text.length + ")");
-      } catch (e) {
+      }catch(e){
         log("Speak error: " + (e && e.message ? e.message : String(e)));
       }
     }
 
-    async function stressSpeak() {
-      const stress = SPEAK_PAYLOAD && SPEAK_PAYLOAD.stress;
-      if (!stress) return;
-
-      const repeat = Math.max(1, Number(SPEAK_PAYLOAD.repeat || 1));
-      const interval = Math.max(250, Number(SPEAK_PAYLOAD.interval_ms || 1000));
-
+    async function stressSpeak(){
+      if(!(SPEAK_PAYLOAD && SPEAK_PAYLOAD.stress)) return;
+      const repeat=Math.max(1, Number(SPEAK_PAYLOAD.repeat||1));
+      const interval=Math.max(250, Number(SPEAK_PAYLOAD.interval_ms||1000));
       log(`Stress mode: repeat=${repeat}, interval_ms=${interval}`);
-      for (let i = 0; i < repeat; i++) {
+      for(let i=0;i<repeat;i++){
         await speakNow();
-        await new Promise(r => setTimeout(r, interval));
+        await new Promise(r=>setTimeout(r, interval));
       }
       log("Stress mode done.");
     }
 
-    reconnectBtn.addEventListener("click", async () => {
+    reconnectBtn.addEventListener("click", async ()=>{
       log("Reconnect pressed.");
-      try { if (room) await room.disconnect(); } catch {}
-      room = null;
+      try{ if(room) await room.disconnect(); }catch{}
+      room=null;
       await connectRoom();
     });
 
-    speakBtn.addEventListener("click", async () => {
+    speakBtn.addEventListener("click", async ()=>{
       await speakNow();
       await stressSpeak();
     });
 
-    // Boot
-    (async () => {
+    (async ()=>{
       log("Viewer boot.");
       log("Payload: nonce=" + (SPEAK_PAYLOAD ? SPEAK_PAYLOAD.nonce : "null"));
       await connectRoom();
 
       // If Streamlit increments nonce, speak after connect
-      if (SPEAK_PAYLOAD && SPEAK_PAYLOAD.nonce > 0) {
+      if(SPEAK_PAYLOAD && SPEAK_PAYLOAD.nonce > 0){
         await speakNow();
         await stressSpeak();
       }
