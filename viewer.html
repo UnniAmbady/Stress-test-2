@@ -1,232 +1,285 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>__AVATAR_NAME__ · Live session</title>
 
-  <!-- LiveKit JS SDK (UMD) -->
+  <!-- LiveKit UMD -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.15.7/livekit-client.umd.min.js"></script>
 
   <style>
-    :root { color-scheme: dark; }
-    body { margin: 0; background: #0b0b0b; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    .wrap { padding: 12px; display: flex; flex-direction: column; gap: 10px; align-items: center; }
-    .title { color: #e9e9e9; font-size: 14px; opacity: 0.95; }
-    .stage { width: 100%; max-width: 760px; aspect-ratio: 16/9; background: #111; border-radius: 18px; overflow: hidden; position: relative; }
-    video { width: 100%; height: 100%; object-fit: cover; background: #111; }
-    .panel { width: 100%; max-width: 760px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.08); border-radius: 14px; padding: 10px; color: #eee; }
-    .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
-    .pill { padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,.10); font-size: 12px; }
-    .ok { color: #a6ffcf; }
-    .bad { color: #ff6b6b; }
-    .warn { color: #ffd166; }
-    button { border: 0; border-radius: 999px; padding: 7px 12px; background: rgba(255,255,255,.14); color: #eee; cursor: pointer; }
-    button:hover { background: rgba(255,255,255,.20); }
-    .log { margin-top: 10px; max-height: 180px; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.35; white-space: pre-wrap; }
+    :root{
+      --bg:#0b0b0b;--panel:rgba(0,0,0,.60);--text:rgba(255,255,255,.92);
+      --muted:rgba(255,255,255,.70);--ok:#a4ffce;--bad:#ff6b6b;--warn:#ffd166;
+      --r:18px
+    }
+    html,body{margin:0;padding:0;background:transparent;font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+    .frame{background:var(--bg);border-radius:var(--r);overflow:hidden;position:relative;height:560px;width:100%}
+    .header{position:absolute;top:0;left:0;right:0;padding:12px 14px;
+      background:linear-gradient(to bottom,rgba(0,0,0,.75),rgba(0,0,0,0));
+      color:var(--text);font-weight:700;z-index:5}
+    .stage{position:absolute;inset:0;display:grid;place-items:center}
+    video{width:100%;height:100%;object-fit:cover;background:#111}
+    .overlay{position:absolute;left:10px;right:10px;bottom:10px;background:var(--panel);
+      color:var(--text);border-radius:14px;padding:10px 12px;font-size:12px;line-height:1.35;z-index:6}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .pill{border-radius:999px;padding:4px 10px;background:rgba(255,255,255,.10);color:var(--muted);font-size:12px}
+    .pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
+    .btn{cursor:pointer;border:0;border-radius:10px;padding:7px 10px;background:rgba(255,255,255,.14);color:var(--text);font-weight:700;font-size:12px}
+    .btn:hover{background:rgba(255,255,255,.18)}
+    .log{margin-top:8px;max-height:150px;overflow:auto;
+      font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+      white-space:pre-wrap;color:rgba(255,255,255,.78);font-size:11px}
   </style>
 </head>
 
 <body>
-<div class="wrap">
-  <div class="title"><b>__AVATAR_NAME__</b> · Live session</div>
+  <div class="frame">
+    <div class="header">__AVATAR_NAME__ · Live session</div>
 
-  <div class="stage">
-    <video id="avatarVideo" autoplay playsinline></video>
-  </div>
-
-  <div class="panel">
-    <div class="row">
-      <span id="sdkPill" class="pill">SDK: ?</span>
-      <span id="roomPill" class="pill">Room: ?</span>
-      <span id="tracksPill" class="pill">Tracks: 0</span>
-      <button id="reconnectBtn">Reconnect</button>
-      <button id="speakBtn">Speak</button>
+    <div class="stage">
+      <video id="avatarVideo" autoplay playsinline></video>
     </div>
-    <div class="log" id="log"></div>
+
+    <div class="overlay">
+      <div class="row">
+        <span id="sdkPill" class="pill">SDK: checking…</span>
+        <span id="roomPill" class="pill">Room: idle</span>
+        <span id="micPill" class="pill">Mic: off</span>
+        <span id="trkPill" class="pill">Tracks: 0</span>
+        <button class="btn" id="reconnectBtn" type="button">Reconnect</button>
+        <button class="btn" id="micBtn" type="button">Enable Mic</button>
+        <button class="btn" id="speakBtn" type="button">Speak</button>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
   </div>
-</div>
 
-<script>
-(function () {
-  const LIVEKIT_URL = "__LIVEKIT_URL__";
-  const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
-  const PAYLOAD = __PAYLOAD_JSON__;
+  <script>
+    const LIVEKIT_URL = "__LIVEKIT_URL__";
+    const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
+    const SPEAK_PAYLOAD = __SPEAK_PAYLOAD_JSON__;
 
-  const sdkPill = document.getElementById("sdkPill");
-  const roomPill = document.getElementById("roomPill");
-  const tracksPill = document.getElementById("tracksPill");
-  const logEl = document.getElementById("log");
-  const videoEl = document.getElementById("avatarVideo");
+    const logEl = document.getElementById("log");
+    const sdkPill = document.getElementById("sdkPill");
+    const roomPill = document.getElementById("roomPill");
+    const micPill = document.getElementById("micPill");
+    const trkPill = document.getElementById("trkPill");
+    const videoEl = document.getElementById("avatarVideo");
+    const reconnectBtn = document.getElementById("reconnectBtn");
+    const micBtn = document.getElementById("micBtn");
+    const speakBtn = document.getElementById("speakBtn");
 
-  const enc = new TextEncoder();
-
-  function ts() {
-    const d = new Date();
-    return d.toLocaleTimeString();
-  }
-  function log(msg) {
-    logEl.textContent += `[${ts()}] ${msg}\n`;
-    logEl.scrollTop = 1e9;
-  }
-  function pill(el, text, cls) {
-    el.textContent = text;
-    el.className = "pill " + (cls || "");
-  }
-
-  // LiveKit UMD global detection
-  const LK = window.LiveKitClient || window.LiveKit || window.livekit || window.livekitClient;
-  if (!LK) {
-    pill(sdkPill, "SDK: missing", "bad");
-    pill(roomPill, "Room: SDK missing", "bad");
-    log("LiveKit SDK missing in iframe. Check CDN / CSP.");
-    return;
-  }
-  pill(sdkPill, "SDK: loaded", "ok");
-
-  let room = null;
-  let tracks = 0;
-  let localMicTrack = null;
-
-  function buildCommand(eventName, dataObj) {
-    // Most LiveAvatar examples accept {type: "<event>", ...data}
-    // We keep it conservative, but also include a nested "data" for compatibility.
-    return {
-      type: eventName,
-      event: eventName,
-      data: dataObj || {}
-    };
-  }
-
-  async function publishCommand(eventName, dataObj) {
-    if (!room) {
-      log("Publish blocked: room not connected.");
-      return;
+    function log(msg){
+      const t=new Date().toISOString().slice(11,19);
+      logEl.textContent += `[${t}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
     }
-    const msg = buildCommand(eventName, dataObj);
-    const bytes = enc.encode(JSON.stringify(msg));
-    await room.localParticipant.publishData(bytes, { reliable: true });
-    log(`Command sent: ${eventName} (bytes=${bytes.length})`);
-  }
+    function setPill(el, text, cls){ el.textContent=text; el.className="pill"+(cls?(" "+cls):""); }
 
-  async function ensureMicPublished() {
-    if (!PAYLOAD.publish_microphone) {
-      log("Mic publish disabled by payload.");
-      return;
-    }
-    if (localMicTrack) {
-      log("Mic already published.");
-      return;
-    }
-    try {
-      log("Requesting microphone…");
-      // createLocalAudioTrack prompts for permission
-      localMicTrack = await LK.createLocalAudioTrack();
-      await room.localParticipant.publishTrack(localMicTrack);
-      log("Microphone published (audio only).");
-    } catch (e) {
-      log("Mic error: " + (e && e.message ? e.message : e));
-    }
-  }
+    window.addEventListener("error", (e)=>log(`window.onerror: ${e.message}`));
+    window.addEventListener("unhandledrejection",(e)=>log(`unhandledrejection: ${e.reason}`));
 
-  async function connect() {
-    try {
-      pill(roomPill, "Room: connecting", "warn");
-      log("Viewer boot.");
-      log(`Payload: nonce=${PAYLOAD.nonce}`);
+    // -------- Robust LiveKit SDK discovery (this is the fix) --------
+    function findLiveKitSDK(){
+      const guesses = [
+        window.LivekitClient,    // <-- the one you saw earlier
+        window.LiveKitClient,
+        window.LiveKit,
+        window.livekit,
+        window.livekitClient,
+        window.LiveKitSDK,
+        window.Livekit
+      ].filter(Boolean);
 
-      room = new LK.Room();
-      room.on(LK.RoomEvent.Disconnected, () => {
-        pill(roomPill, "Room: disconnected", "bad");
-        log("Disconnected.");
-      });
-
-      room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
-        tracks += 1;
-        tracksPill.textContent = `Tracks: ${tracks}`;
-        log(`TrackSubscribed: kind=${track.kind}, from=${participant.identity}`);
-
-        if (track.kind === "video") {
-          track.attach(videoEl);
-          log("Attached avatar video.");
-        } else if (track.kind === "audio") {
-          const a = document.createElement("audio");
-          a.autoplay = true;
-          track.attach(a);
-          log("Attached avatar audio.");
-        }
-      });
-
-      room.on(LK.RoomEvent.DataReceived, (payload, participant) => {
-        try {
-          const txt = new TextDecoder().decode(payload);
-          log(`DataReceived from=${participant?.identity || "unknown"} bytes=${payload.length} txt=${txt.slice(0,160)}`);
-        } catch (_) {
-          log(`DataReceived from=${participant?.identity || "unknown"} bytes=${payload.length}`);
-        }
-      });
-
-      log("Connecting to LiveKit…");
-      log("URL: " + LIVEKIT_URL);
-      log("Token length: " + (LIVEKIT_TOKEN ? LIVEKIT_TOKEN.length : 0));
-
-      await room.connect(LIVEKIT_URL, LIVEKIT_TOKEN, { autoSubscribe: true });
-      pill(roomPill, "Room: connected", "ok");
-      log("Connected.");
-
-      await ensureMicPublished();
-    } catch (e) {
-      pill(roomPill, "Room: error", "bad");
-      log("Connect error: " + (e && e.message ? e.message : e));
-    }
-  }
-
-  async function speakFlow(text) {
-    // The requested experiment:
-    // interrupt -> wait 500ms -> speak_text
-    try {
-      if (PAYLOAD.interrupt_before_speak) {
-        await publishCommand("avatar.interrupt", {});
-        const d = Number(PAYLOAD.interrupt_delay_ms || 500);
-        log(`Sleep ${d}ms…`);
-        await new Promise((res) => setTimeout(res, d));
+      for(const g of guesses){
+        if(g && g.Room && g.RoomEvent) return { sdk:g, name:"guessed" };
       }
-      await publishCommand("avatar.speak_text", { text: String(text || "") });
-    } catch (e) {
-      log("SpeakFlow error: " + (e && e.message ? e.message : e));
+
+      const keys = Object.keys(window);
+      const hits = keys.filter(k => /livekit/i.test(k));
+      if(hits.length) log("window keys matching /livekit/i: " + hits.join(", "));
+
+      for(const k of hits){
+        try{
+          const v = window[k];
+          if(v && v.Room && v.RoomEvent) return { sdk:v, name:k };
+        }catch{}
+      }
+      return null;
     }
-  }
 
-  document.getElementById("reconnectBtn").addEventListener("click", async () => {
-    log("Reconnect pressed.");
-    try { if (room) await room.disconnect(); } catch (_) {}
-    room = null;
-    tracks = 0;
-    tracksPill.textContent = "Tracks: 0";
-    await connect();
-  });
-
-  document.getElementById("speakBtn").addEventListener("click", async () => {
-    if (!room) return log("Speak blocked: room not connected.");
-    await ensureMicPublished();
-    const text = (PAYLOAD && typeof PAYLOAD.text === "string") ? PAYLOAD.text : "";
-    log(`Speak pressed. text_chars=${text.length}`);
-    await speakFlow(text);
-  });
-
-  // Auto-run on connect if nonce > 0 (i.e., Streamlit button pressed)
-  connect().then(async () => {
-    const nonce = Number(PAYLOAD.nonce || 0);
-    if (nonce > 0) {
-      // Give a small settling time after connect
-      await new Promise((r) => setTimeout(r, 300));
-      const text = (PAYLOAD && typeof PAYLOAD.text === "string") ? PAYLOAD.text : "";
-      log(`Auto-speak (nonce=${nonce}) text_chars=${text.length}`);
-      await speakFlow(text);
+    async function ensureSDK(){
+      let found = findLiveKitSDK();
+      if(found){
+        setPill(sdkPill, "SDK: loaded", "ok");
+        log("LiveKit SDK found via " + found.name);
+        return found.sdk;
+      }
+      setPill(sdkPill, "SDK: missing", "bad");
+      log("LiveKit SDK missing in iframe. Check CDN / CSP.");
+      return null;
     }
-  });
 
-})();
-</script>
+    // -------- LiveKit room + tracks --------
+    let LK = null;
+    let room = null;
+    let remoteVideoTrack = null;
+    let remoteAudioTracks = [];
+    let localMicTrack = null;
+
+    function detachAll(){
+      try{
+        if(remoteVideoTrack){ remoteVideoTrack.detach(videoEl); remoteVideoTrack=null; }
+        remoteAudioTracks.forEach(t=>{
+          try{
+            t.__audioEl && t.detach(t.__audioEl);
+            t.__audioEl && t.__audioEl.remove();
+          }catch{}
+        });
+        remoteAudioTracks=[];
+      }catch{}
+      setPill(trkPill, "Tracks: 0", "");
+    }
+
+    function trackCount(){
+      return (remoteVideoTrack?1:0) + remoteAudioTracks.length + (localMicTrack?1:0);
+    }
+
+    async function connectRoom(){
+      detachAll();
+      LK = await ensureSDK();
+      if(!LK){ setPill(roomPill, "Room: SDK missing", "bad"); return; }
+
+      try{
+        setPill(roomPill, "Room: connecting…", "warn");
+        log("Connecting to LiveKit…");
+        log("URL: " + LIVEKIT_URL);
+        log("Token length: " + (LIVEKIT_TOKEN ? LIVEKIT_TOKEN.length : 0));
+
+        room = new LK.Room({ adaptiveStream:true, dynacast:true });
+
+        room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant)=>{
+          log(`TrackSubscribed: kind=${track.kind}, from=${participant.identity}`);
+
+          if(track.kind==="video" && !remoteVideoTrack){
+            remoteVideoTrack = track;
+            track.attach(videoEl);
+            log("Attached avatar video.");
+          }
+
+          if(track.kind==="audio"){
+            const a=document.createElement("audio");
+            a.autoplay=true; a.playsInline=true;
+            document.body.appendChild(a);
+            track.attach(a);
+            track.__audioEl=a;
+            remoteAudioTracks.push(track);
+            log("Attached avatar audio.");
+          }
+
+          setPill(trkPill, `Tracks: ${trackCount()}`, trackCount()? "ok": "");
+        });
+
+        room.on(LK.RoomEvent.Disconnected, (reason)=>{
+          setPill(roomPill, "Room: disconnected", "bad");
+          log("Disconnected: " + reason);
+        });
+
+        // Helpful: log any data coming back (acks/errors if they exist)
+        room.on(LK.RoomEvent.DataReceived, (payload, participant, kind, topic)=>{
+          try{
+            const txt = new TextDecoder().decode(payload);
+            log(`DataReceived from=${participant?.identity || "?"} topic=${topic||""} kind=${kind}: ${txt}`);
+          }catch(e){
+            log("DataReceived (binary) from=" + (participant?.identity||"?"));
+          }
+        });
+
+        await room.connect(LIVEKIT_URL, LIVEKIT_TOKEN);
+        setPill(roomPill, "Room: connected", "ok");
+        log("Connected.");
+
+        setPill(trkPill, `Tracks: ${trackCount()}`, trackCount()? "ok": "");
+
+      }catch(e){
+        setPill(roomPill, "Room: error", "bad");
+        log("Connect error: " + (e && e.message ? e.message : String(e)));
+      }
+    }
+
+    // -------- Mic ON (publish local audio track) --------
+    async function enableMic(){
+      if(!LK || !room || !room.localParticipant){
+        log("Mic blocked: room not ready.");
+        return;
+      }
+      try{
+        setPill(micPill, "Mic: requesting…", "warn");
+        localMicTrack = await LK.createLocalAudioTrack();
+        await room.localParticipant.publishTrack(localMicTrack);
+        setPill(micPill, "Mic: ON", "ok");
+        log("Local microphone published.");
+        setPill(trkPill, `Tracks: ${trackCount()}`, "ok");
+      }catch(e){
+        setPill(micPill, "Mic: denied", "bad");
+        log("Mic error: " + (e && e.message ? e.message : String(e)));
+      }
+    }
+
+    // -------- Command events experiment: interrupt -> wait 500ms -> speak_text --------
+    function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+
+    async function sendCommand(obj){
+      if(!room || !room.localParticipant){
+        log("Command blocked: room not connected.");
+        return;
+      }
+      const bytes = new TextEncoder().encode(JSON.stringify(obj));
+      await room.localParticipant.publishData(bytes, { reliable:true });
+    }
+
+    async function interruptThenSpeak(){
+      const text = (SPEAK_PAYLOAD && SPEAK_PAYLOAD.text) ? String(SPEAK_PAYLOAD.text) : "";
+      if(!text.trim()){
+        log("Speak blocked: empty text.");
+        return;
+      }
+      try{
+        // interrupt
+        await sendCommand({ event:"avatar.interrupt", data:{} });
+        log("Command sent: avatar.interrupt");
+
+        // wait
+        await sleep(500);
+
+        // speak
+        await sendCommand({ event:"avatar.speak_text", data:{ text } });
+        log(`Command sent: avatar.speak_text (chars=${text.length})`);
+      }catch(e){
+        log("Speak pipeline error: " + (e && e.message ? e.message : String(e)));
+      }
+    }
+
+    // -------- UI hooks --------
+    reconnectBtn.addEventListener("click", async ()=>{
+      log("Reconnect pressed.");
+      try{ if(room) await room.disconnect(); }catch{}
+      room=null; LK=null; localMicTrack=null;
+      setPill(micPill, "Mic: off", "");
+      await connectRoom();
+    });
+
+    micBtn.addEventListener("click", enableMic);
+    speakBtn.addEventListener("click", interruptThenSpeak);
+
+    // -------- boot --------
+    (async ()=>{
+      log("Viewer boot.");
+      log("Payload: nonce=" + (SPEAK_PAYLOAD ? SPEAK_PAYLOAD.nonce : "null"));
+      await connectRoom();
+    })();
+  </script>
 </body>
 </html>
