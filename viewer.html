@@ -1,177 +1,380 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>LiveAvatar Viewer</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>__AVATAR_NAME__ · Live session</title>
 
-  <!-- LiveKit JS SDK (UMD) via cdnjs -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.15.7/livekit-client.umd.min.js"></script>
+  <!-- ✅ LiveKit UMD bundle (required) -->
+  <script
+    src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.15.7/livekit-client.umd.min.js"
+    onload="window.__lk_loaded__=true;"
+    onerror="window.__lk_loaded__=false; window.__lk_load_error__='Failed to load LiveKit SDK from cdnjs';"
+  ></script>
 
   <style>
-    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background: #0b0b0b; color: #eee; }
-    .wrap { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding: 14px; gap: 10px; }
-    .title { font-size: 14px; opacity: 0.9; }
-    .stage { width: 100%; max-width: 720px; aspect-ratio: 16/9; background: #111; border-radius: 16px; overflow: hidden; position: relative; }
-    video { width: 100%; height: 100%; object-fit: cover; background: #111; }
-    .status { font-size: 12px; opacity: 0.9; }
-    .status span { opacity: 0.8; }
+    :root {
+      --bg: #0b0b0b;
+      --panel: rgba(0,0,0,.55);
+      --text: rgba(255,255,255,.92);
+      --muted: rgba(255,255,255,.65);
+      --accent: #a4ffce;
+      --danger: #ff6b6b;
+      --warn: #ffd166;
+      --radius: 18px;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    .frame {
+      background: var(--bg);
+      border-radius: var(--radius);
+      overflow: hidden;
+      position: relative;
+      height: 540px;
+      width: 100%;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+    .header {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 12px 14px;
+      background: linear-gradient(to bottom, rgba(0,0,0,.7), rgba(0,0,0,0));
+      color: var(--text);
+      font-weight: 600;
+      z-index: 5;
+      letter-spacing: .2px;
+    }
+    .stage {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #111;
+    }
+    .overlay {
+      position: absolute;
+      left: 10px;
+      right: 10px;
+      bottom: 10px;
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 14px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.35;
+      z-index: 6;
+    }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .pill {
+      border-radius: 999px;
+      padding: 4px 10px;
+      background: rgba(255,255,255,.08);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .pill.ok { color: var(--accent); }
+    .pill.warn { color: var(--warn); }
+    .pill.bad { color: var(--danger); }
+    .log {
+      margin-top: 8px;
+      max-height: 88px;
+      overflow: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      color: rgba(255,255,255,.75);
+      font-size: 11px;
+    }
+    .btn {
+      cursor: pointer;
+      border: 0;
+      border-radius: 10px;
+      padding: 7px 10px;
+      background: rgba(255,255,255,.12);
+      color: var(--text);
+      font-weight: 600;
+      font-size: 12px;
+    }
+    .btn:hover { background: rgba(255,255,255,.16); }
   </style>
 </head>
+
 <body>
-  <div class="wrap">
-    <div class="title"><b>__AVATAR_NAME__</b> · Live session</div>
+  <div class="frame">
+    <div class="header">__AVATAR_NAME__ · Live session</div>
+
     <div class="stage">
+      <!-- We render only the remote avatar video track here -->
       <video id="avatarVideo" autoplay playsinline></video>
+      <!-- Remote audio will be attached dynamically -->
     </div>
-    <div class="status" id="status">Connecting…</div>
+
+    <div class="overlay">
+      <div class="row">
+        <span id="sdkPill" class="pill">SDK: checking…</span>
+        <span id="connPill" class="pill">Room: idle</span>
+        <span id="trkPill" class="pill">Tracks: 0</span>
+        <button class="btn" id="reconnectBtn" type="button">Reconnect</button>
+        <button class="btn" id="speakBtn" type="button">Speak</button>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
   </div>
 
-<script>
-(function () {
-  const LIVEKIT_URL = "__LIVEKIT_URL__";
-  const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
-  const SPEAK = __SPEAK_PAYLOAD_JSON__;
+  <script>
+    // ---------------- Injected by Streamlit ----------------
+    const LIVEKIT_URL = "__LIVEKIT_URL__";
+    const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
+    const SPEAK_PAYLOAD = __SPEAK_PAYLOAD_JSON__;
 
-  const statusEl = document.getElementById("status");
-  const avatarVideo = document.getElementById("avatarVideo");
+    // ---------------- UI helpers ----------------
+    const logEl = document.getElementById("log");
+    const sdkPill = document.getElementById("sdkPill");
+    const connPill = document.getElementById("connPill");
+    const trkPill = document.getElementById("trkPill");
+    const videoEl = document.getElementById("avatarVideo");
+    const reconnectBtn = document.getElementById("reconnectBtn");
+    const speakBtn = document.getElementById("speakBtn");
 
-  const LK = window.LiveKitClient;
-  if (!LK) {
-    statusEl.textContent = "LiveKitClient not loaded.";
-    return;
-  }
-
-  // --- Helpers ---
-  const enc = new TextEncoder();
-
-  function setStatus(msg) {
-    statusEl.textContent = msg;
-  }
-
-  // LiveAvatar FULL-mode command event sender.
-  // Docs only specify event name + data schema (text).
-  // In practice, many event systems expect a "type" field.
-  // We send {type: <event>, ...data }.
-  function buildCommand(eventName, dataObj) {
-    return Object.assign({ type: eventName }, (dataObj || {}));
-  }
-
-  async function publishCommand(room, eventName, dataObj) {
-    const payload = buildCommand(eventName, dataObj);
-    const bytes = enc.encode(JSON.stringify(payload));
-    // RELIABLE is better for commands.
-    await room.localParticipant.publishData(bytes, LK.DataPacket_Kind.RELIABLE);
-  }
-
-  // --- LiveKit room ---
-  const room = new LK.Room({
-    adaptiveStream: true,
-    dynacast: true,
-    // autoSubscribe=true so we receive the avatar tracks
-  });
-
-  // Track management: attach ONLY remote avatar video/audio.
-  function attachRemoteTrack(track) {
-    try {
-      if (track.kind === "video") {
-        track.attach(avatarVideo);
-      } else if (track.kind === "audio") {
-        // Attach audio to hidden element
-        const a = track.attach();
-        a.style.display = "none";
-        document.body.appendChild(a);
-      }
-    } catch (e) {
-      console.warn("attach failed", e);
+    function log(msg) {
+      const t = new Date().toISOString().slice(11, 19);
+      logEl.textContent += `[${t}] ${msg}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
     }
-  }
 
-  room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant) => {
-    // The HeyGen/LiveAvatar participant will publish video + audio
-    attachRemoteTrack(track);
-  });
+    function setPill(el, text, cls) {
+      el.textContent = text;
+      el.className = "pill" + (cls ? " " + cls : "");
+    }
 
-  room.on(LK.RoomEvent.ParticipantConnected, (p) => {
-    // For debugging; not shown in UI.
-    // console.log("participant connected", p.identity);
-  });
-
-  room.on(LK.RoomEvent.Disconnected, () => {
-    setStatus("Disconnected.");
-  });
-
-  // Listen for server events (optional)
-  room.on(LK.RoomEvent.DataReceived, (payload, participant, kind) => {
-    try {
-      const txt = new TextDecoder().decode(payload);
-      // LiveAvatar server events are emitted into the room; useful for debugging.
-      // console.log("data recv", txt);
-    } catch (_) {}
-  });
-
-  async function connect() {
-    setStatus("Connecting to LiveKit…");
-    await room.connect(LIVEKIT_URL, LIVEKIT_TOKEN, { autoSubscribe: true });
-
-    // IMPORTANT: We do NOT enable camera/mic.
-    // This prevents the user's video tile + permission prompts.
-    // (We never call createLocalTracks / setCameraEnabled / setMicrophoneEnabled)
-
-    setStatus("Connected. Waiting for avatar tracks…");
-
-    // If remote avatar already published tracks before we subscribed:
-    room.remoteParticipants.forEach((p) => {
-      p.trackPublications.forEach((pub) => {
-        if (pub.isSubscribed && pub.track) attachRemoteTrack(pub.track);
-      });
+    // Capture browser-side errors into the on-screen log
+    window.addEventListener("error", (e) => {
+      log(`window.onerror: ${e.message}`);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      log(`unhandledrejection: ${e.reason}`);
     });
 
-    // Speak logic
-    const text = (SPEAK.text || "").trim();
-    if (!text) return;
-
-    // Auto-speak, or speak when nonce increments (Streamlit triggers iframe reload).
-    if (SPEAK.auto || (SPEAK.nonce && SPEAK.nonce > 0)) {
-      await doSpeak(text);
+    // ---------------- LiveKit global detection ----------------
+    function getLiveKitGlobal() {
+      // Different bundles expose different names. We support common ones.
+      return window.LiveKitClient || window.LiveKit || window.livekit || null;
     }
 
-    // Stress mode: repeat speak_text N times
-    if (SPEAK.stress) {
-      const repeat = Math.max(1, Number(SPEAK.repeat || 1));
-      const interval = Math.max(250, Number(SPEAK.interval_ms || 1000));
+    function sdkDiagnostics() {
+      const lk = getLiveKitGlobal();
+      const loaded = (window.__lk_loaded__ === true);
+      const err = window.__lk_load_error__;
 
-      let i = 0;
-      const timer = setInterval(async () => {
-        i += 1;
-        try {
-          await doSpeak(text);
-          setStatus(`Speaking… (${i}/${repeat})`);
-        } catch (e) {
-          console.error(e);
-          setStatus("Speak failed (see console).");
-          clearInterval(timer);
-        }
-        if (i >= repeat) {
-          clearInterval(timer);
-          setStatus("Done.");
-        }
-      }, interval);
+      if (lk) {
+        setPill(sdkPill, "SDK: loaded", "ok");
+        log("LiveKit SDK global detected: " + (window.LiveKitClient ? "LiveKitClient" : (window.LiveKit ? "LiveKit" : "livekit")));
+      } else if (loaded === false) {
+        setPill(sdkPill, "SDK: failed", "bad");
+        log(err || "LiveKit SDK failed to load (script onerror).");
+      } else {
+        // Could still be loading; check again shortly.
+        setPill(sdkPill, "SDK: not ready", "warn");
+        log("LiveKit SDK not ready yet. (If this persists, the script may be blocked inside iframe.)");
+      }
+      return lk;
     }
-  }
 
-  async function doSpeak(text) {
-    // Primary command: avatar.speak_text
-    // Event data schema: {"text": string}
-    await publishCommand(room, "avatar.speak_text", { text });
-  }
+    // ---------------- LiveKit room ----------------
+    let room = null;
+    let remoteVideoTrack = null;
+    let remoteAudioTracks = [];
 
-  connect().catch((e) => {
-    console.error(e);
-    setStatus("Connect failed (see console).");
-  });
+    function detachAll() {
+      try {
+        if (remoteVideoTrack) {
+          remoteVideoTrack.detach(videoEl);
+          remoteVideoTrack = null;
+        }
+        // Detach/remove audio elements
+        remoteAudioTracks.forEach(t => {
+          try {
+            t.__audioEl && t.detach(t.__audioEl);
+            t.__audioEl && t.__audioEl.remove();
+          } catch {}
+        });
+        remoteAudioTracks = [];
+      } catch {}
+      trkPill.textContent = "Tracks: 0";
+    }
 
-})();
-</script>
+    async function connectRoom() {
+      detachAll();
+
+      const LK = sdkDiagnostics();
+      if (!LK) {
+        // Retry once after a short delay (sometimes script loads slightly after)
+        await new Promise(r => setTimeout(r, 700));
+        const LK2 = sdkDiagnostics();
+        if (!LK2) {
+          setPill(connPill, "Room: SDK missing", "bad");
+          return;
+        }
+      }
+
+      const LiveKit = getLiveKitGlobal();
+      if (!LiveKit || !LiveKit.Room) {
+        setPill(connPill, "Room: bad SDK", "bad");
+        log("SDK loaded but LiveKit.Room not found. Likely wrong bundle type or blocked script.");
+        return;
+      }
+
+      try {
+        setPill(connPill, "Room: connecting…", "warn");
+        log("Connecting to LiveKit…");
+        log("URL: " + LIVEKIT_URL);
+        log("Token length: " + (LIVEKIT_TOKEN ? LIVEKIT_TOKEN.length : 0));
+
+        // Important: DO NOT create/publish local audio/video tracks.
+        // We connect as a data-only participant.
+        room = new LiveKit.Room({
+          // adaptiveStream / dynacast are optional; safe defaults.
+          adaptiveStream: true,
+          dynacast: true,
+        });
+
+        // Track events
+        room.on(LiveKit.RoomEvent.TrackSubscribed, (track, pub, participant) => {
+          log(`TrackSubscribed: kind=${track.kind}, source=${pub.source}, from=${participant.identity}`);
+
+          if (track.kind === "video" && !remoteVideoTrack) {
+            remoteVideoTrack = track;
+            track.attach(videoEl);
+            log("Attached remote video to main element.");
+          }
+
+          if (track.kind === "audio") {
+            const a = document.createElement("audio");
+            a.autoplay = true;
+            a.playsInline = true;
+            document.body.appendChild(a);
+            track.attach(a);
+            track.__audioEl = a;
+            remoteAudioTracks.push(track);
+            log("Attached remote audio.");
+          }
+
+          const count = (remoteVideoTrack ? 1 : 0) + remoteAudioTracks.length;
+          setPill(trkPill, `Tracks: ${count}`, count ? "ok" : "");
+        });
+
+        room.on(LiveKit.RoomEvent.Disconnected, (reason) => {
+          setPill(connPill, "Room: disconnected", "bad");
+          log("Disconnected: " + reason);
+        });
+
+        // Connect
+        await room.connect(LIVEKIT_URL, LIVEKIT_TOKEN);
+        setPill(connPill, "Room: connected", "ok");
+        log("Connected.");
+
+        // Auto speak if requested
+        if (SPEAK_PAYLOAD && SPEAK_PAYLOAD.auto) {
+          await speakNow();
+        }
+
+      } catch (e) {
+        setPill(connPill, "Room: error", "bad");
+        log("Connect error: " + (e && e.message ? e.message : String(e)));
+      }
+    }
+
+    // ---------------- Command events: avatar.speak_text ----------------
+    function buildSpeakMessage(text) {
+      // Per docs: avatar.speak_text takes {"text": string}
+      // We wrap it with an "event" field to identify the command type.
+      // If HeyGen expects a different envelope, your Server Events log will reveal it.
+      return {
+        event: "avatar.speak_text",
+        data: { text: text },
+        text: text, // extra compatibility (harmless if ignored)
+      };
+    }
+
+    async function speakNow() {
+      try {
+        if (!room || !room.localParticipant) {
+          log("Speak blocked: room not connected.");
+          return;
+        }
+        const text = (SPEAK_PAYLOAD && SPEAK_PAYLOAD.text) ? String(SPEAK_PAYLOAD.text) : "";
+        if (!text.trim()) {
+          log("Speak blocked: empty text.");
+          return;
+        }
+
+        const msg = buildSpeakMessage(text);
+        const bytes = new TextEncoder().encode(JSON.stringify(msg));
+
+        // reliable = true to avoid loss
+        await room.localParticipant.publishData(bytes, { reliable: true });
+
+        log("Command sent: avatar.speak_text (chars=" + text.length + ")");
+      } catch (e) {
+        log("Speak error: " + (e && e.message ? e.message : String(e)));
+      }
+    }
+
+    async function stressSpeak() {
+      const stress = SPEAK_PAYLOAD && SPEAK_PAYLOAD.stress;
+      if (!stress) return;
+
+      const repeat = Math.max(1, Number(SPEAK_PAYLOAD.repeat || 1));
+      const interval = Math.max(250, Number(SPEAK_PAYLOAD.interval_ms || 1000));
+
+      log(`Stress mode: repeat=${repeat}, interval_ms=${interval}`);
+      for (let i = 0; i < repeat; i++) {
+        await speakNow();
+        await new Promise(r => setTimeout(r, interval));
+      }
+      log("Stress mode done.");
+    }
+
+    // ---------------- Buttons ----------------
+    reconnectBtn.addEventListener("click", async () => {
+      try {
+        log("Reconnect pressed.");
+        if (room) {
+          await room.disconnect();
+          room = null;
+        }
+      } catch {}
+      await connectRoom();
+    });
+
+    speakBtn.addEventListener("click", async () => {
+      await speakNow();
+      await stressSpeak();
+    });
+
+    // ---------------- Boot ----------------
+    (async () => {
+      log("Viewer boot.");
+      log("Payload: nonce=" + (SPEAK_PAYLOAD ? SPEAK_PAYLOAD.nonce : "null"));
+      await connectRoom();
+
+      // If nonce was triggered or stress enabled, attempt speak automatically once connected.
+      // This supports your Streamlit button updating SPEAK_PAYLOAD.
+      if (SPEAK_PAYLOAD && (SPEAK_PAYLOAD.nonce > 0)) {
+        await speakNow();
+        await stressSpeak();
+      }
+    })();
+  </script>
 </body>
 </html>
