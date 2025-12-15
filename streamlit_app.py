@@ -94,7 +94,7 @@ def create_session(api_key: str, avatar_id: str, voice_id: str, language: str, a
     resp = post_json(
         API_NEW_SESSION,
         api_key,
-        {"avatar_id": avatar_id, "voice_id": voice_id, "language": language},
+        {"avatar_id": "June_HR_public", "voice_id": voice_id, "language": language},
         auth_mode=auth_mode,
     )
     data = resp.get("data") or {}
