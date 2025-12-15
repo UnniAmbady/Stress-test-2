@@ -5,9 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>HeyGen Streaming Avatar Viewer (Custom Mode)</title>
 
-  <!-- LiveKit SDK (UMD). Note: Some environments block external scripts in iframes. -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.15.7/livekit-client.umd.min.js"></script>
-
   <style>
     :root { color-scheme: dark; }
     body { margin: 0; background: #0b0b0b; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
@@ -19,11 +16,10 @@
     .badge { padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.10); color: #cfd3d8; font-size: 14px; }
     .badge.good { color: #7ef29d; }
     .badge.bad { color: #ff8b8b; }
-    .btns { display:flex; gap: 10px; margin: 10px 0; }
+    .btns { display:flex; gap: 10px; margin: 10px 0; flex-wrap: wrap; }
     button { appearance:none; border:none; padding: 10px 14px; border-radius: 14px; background: rgba(255,255,255,0.10); color:#fff; font-size: 16px; cursor:pointer; }
     button:hover { background: rgba(255,255,255,0.15); }
-    .log { max-height: 160px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.35; color: #d6d6d6; white-space: pre-wrap; }
-    .muted { opacity: 0.9; }
+    .log { max-height: 190px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.35; color: #d6d6d6; white-space: pre-wrap; }
   </style>
 </head>
 
@@ -34,16 +30,16 @@
 
     <div class="hud">
       <div class="badges">
-        <div class="badge" id="sdkBadge">SDK: checking…</div>
-        <div class="badge" id="roomBadge">Room: idle</div>
-        <div class="badge" id="micBadge">Mic: off</div>
+        <div class="badge" id="webrtcBadge">WebRTC: idle</div>
+        <div class="badge" id="startBadge">Start: pending</div>
+        <div class="badge" id="audioBadge">Audio: pending</div>
         <div class="badge" id="trackBadge">Tracks: 0</div>
       </div>
 
       <div class="btns">
         <button id="reconnectBtn">Reconnect</button>
-        <button id="micBtn">Enable Mic</button>
-        <button id="speakBtn">Speak</button>
+        <button id="speakBtn">Speak (repeat)</button>
+        <button id="interruptBtn">Interrupt</button>
       </div>
 
       <div class="log" id="log"></div>
@@ -51,13 +47,12 @@
   </div>
 
 <script>
-  // Payload injected by Streamlit (do not rename placeholder)
   const PAYLOAD = /*__PAYLOAD__*/;
 
   const logEl = document.getElementById("log");
-  const sdkBadge = document.getElementById("sdkBadge");
-  const roomBadge = document.getElementById("roomBadge");
-  const micBadge = document.getElementById("micBadge");
+  const webrtcBadge = document.getElementById("webrtcBadge");
+  const startBadge = document.getElementById("startBadge");
+  const audioBadge = document.getElementById("audioBadge");
   const trackBadge = document.getElementById("trackBadge");
   const titleEl = document.getElementById("title");
   const videoEl = document.getElementById("avatarVideo");
@@ -79,135 +74,203 @@
     if (state === "bad") el.classList.add("bad");
   }
 
+  function authHeaders() {
+    const h = { "content-type": "application/json", "accept": "application/json" };
+    if (PAYLOAD.auth_mode === "bearer") h["Authorization"] = "Bearer " + PAYLOAD.api_key;
+    else h["X-Api-Key"] = PAYLOAD.api_key;
+    return h;
+  }
+
   addLog("Viewer boot.");
   addLog("Payload: nonce=" + PAYLOAD.nonce);
+  addLog("Session: " + PAYLOAD.session_id);
+  addLog("Offer: type=" + (PAYLOAD.offer && PAYLOAD.offer.type) + " sdp_len=" + ((PAYLOAD.offer && PAYLOAD.offer.sdp) ? PAYLOAD.offer.sdp.length : 0));
 
-  // LiveKit UMD exposes either LivekitClient or livekit (depending on build/CDN)
-  function findLiveKitSDK() {
-    if (window.LivekitClient) return window.LivekitClient;
-    if (window.livekit) return window.livekit;
-    if (window.LiveKitClient) return window.LiveKitClient;
-    return null;
-  }
-
-  const SDK = findLiveKitSDK();
-  if (!SDK) {
-    setBadge(sdkBadge, "SDK: missing", "bad");
-    setBadge(roomBadge, "Room: SDK missing", "bad");
-    addLog("LiveKit SDK missing in iframe. Check CDN / CSP.");
-  } else {
-    setBadge(sdkBadge, "SDK: loaded", "good");
-    addLog("LiveKit SDK found.");
-  }
-
-  let room = null;
-  let micTrack = null;
+  let pc = null;
+  let remoteAudioEl = null;
+  let trackCount = 0;
 
   function updateTracks() {
-    try {
-      if (!room) { trackBadge.textContent = "Tracks: 0"; return; }
-      const count = room.remoteParticipants ? Array.from(room.remoteParticipants.values()).reduce((acc,p)=>acc + p.trackPublications.size,0) : 0;
-      trackBadge.textContent = "Tracks: " + count;
-    } catch { /* ignore */ }
+    trackBadge.textContent = "Tracks: " + trackCount;
   }
 
-  async function connect() {
-    if (!SDK) return;
+  function cleanup() {
+    try { if (remoteAudioEl) remoteAudioEl.remove(); } catch {}
+    remoteAudioEl = null;
+
+    try { if (pc) pc.close(); } catch {}
+    pc = null;
+
+    trackCount = 0;
+    updateTracks();
+
+    setBadge(webrtcBadge, "WebRTC: idle", null);
+    setBadge(startBadge, "Start: pending", null);
+    setBadge(audioBadge, "Audio: pending", null);
+  }
+
+  async function connectWebRTCAndStart() {
+    cleanup();
+
     try {
-      setBadge(roomBadge, "Room: connecting…", null);
-      addLog("Connecting to LiveKit…");
-      addLog("URL: " + PAYLOAD.livekit_url);
-      addLog("Token length: " + (PAYLOAD.livekit_token ? PAYLOAD.livekit_token.length : 0));
+      setBadge(webrtcBadge, "WebRTC: creating…", null);
+
       const delay = Number(PAYLOAD.connect_delay_ms || 0);
       if (delay > 0) { addLog("Connect delay: waiting " + delay + "ms…"); await new Promise(r=>setTimeout(r,delay)); }
 
-      room = new SDK.Room({
-        adaptiveStream: true,
-        dynacast: true,
+      pc = new RTCPeerConnection({
+        iceServers: Array.isArray(PAYLOAD.ice_servers) ? PAYLOAD.ice_servers : []
       });
 
-      room.on("trackSubscribed", (track, publication, participant) => {
-        addLog(`TrackSubscribed: kind=${track.kind}, from=${participant.identity}`);
-        if (track.kind === "video") {
-          const el = track.attach();
-          el.autoplay = true;
-          el.playsInline = true;
-          el.muted = true; // avoid autoplay policies; we only need avatar audio track separately
-          el.style.width = "100%";
-          el.style.height = "100%";
-          el.style.objectFit = "cover";
-          // replace current video
-          videoEl.replaceWith(el);
-          el.id = "avatarVideo";
-          addLog("Attached avatar video.");
-        } else if (track.kind === "audio") {
-          const audioEl = track.attach();
-          audioEl.autoplay = true;
-          audioEl.controls = false;
-          audioEl.style.display = "none";
-          document.body.appendChild(audioEl);
-          addLog("Attached avatar audio.");
-        }
+      pc.oniceconnectionstatechange = () => {
+        addLog("ICE state: " + pc.iceConnectionState);
+      };
+
+      pc.ontrack = (ev) => {
+        const track = ev.track;
+        addLog("ontrack: kind=" + track.kind);
+        trackCount += 1;
         updateTracks();
+
+        if (track.kind === "video") {
+          // attach video
+          const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([track]);
+          videoEl.srcObject = stream;
+          videoEl.muted = true; // keep muted; audio handled separately
+          videoEl.play().catch(()=>{});
+        }
+
+        if (track.kind === "audio") {
+          // attach audio
+          const stream = ev.streams && ev.streams[0] ? ev.streams[0] : new MediaStream([track]);
+          if (!remoteAudioEl) {
+            remoteAudioEl = document.createElement("audio");
+            remoteAudioEl.autoplay = true;
+            remoteAudioEl.controls = false;
+            remoteAudioEl.style.display = "none";
+            document.body.appendChild(remoteAudioEl);
+          }
+          remoteAudioEl.srcObject = stream;
+          remoteAudioEl.play().catch(()=>{});
+          setBadge(audioBadge, "Audio: attached", "good");
+        }
+      };
+
+      // 1) Apply offer from streaming.new
+      await pc.setRemoteDescription(PAYLOAD.offer);
+      addLog("RemoteDescription set (offer).");
+
+      // 2) Create & set answer
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      addLog("LocalDescription set (answer). sdp_len=" + (answer.sdp ? answer.sdp.length : 0));
+
+      setBadge(webrtcBadge, "WebRTC: ready", "good");
+
+      // 3) Call streaming.start with answer SDP
+      setBadge(startBadge, "Start: sending…", null);
+
+      const startUrl = PAYLOAD.api_base + "/streaming.start";
+      const startPayload = {
+        session_id: PAYLOAD.session_id,
+        sdp: { type: "answer", sdp: answer.sdp }
+      };
+
+      addLog("POST " + startUrl + " (sending answer) …");
+      const r = await fetch(startUrl, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(startPayload)
       });
 
-      room.on("disconnected", () => {
-        setBadge(roomBadge, "Room: disconnected", "bad");
-        addLog("Disconnected.");
-      });
+      const txt = await r.text();
+      addLog("Start HTTP " + r.status + " body=" + (txt ? txt.slice(0, 500) : ""));
 
-      await room.connect(PAYLOAD.livekit_url, PAYLOAD.livekit_token);
-      setBadge(roomBadge, "Room: connected", "good");
-      addLog("Connected.");
-      updateTracks();
-
-      if (PAYLOAD.auto_enable_mic) {
-        addLog("Auto: enabling mic …");
-        await enableMic();
+      if (!r.ok) {
+        setBadge(startBadge, "Start: failed", "bad");
+        throw new Error("streaming.start failed: " + r.status);
       }
+
+      setBadge(startBadge, "Start: OK", "good");
+      addLog("Started.");
+
     } catch (e) {
-      setBadge(roomBadge, "Room: error", "bad");
-      addLog("Connect error: " + (e && e.message ? e.message : String(e)));
+      setBadge(webrtcBadge, "WebRTC: error", "bad");
+      setBadge(startBadge, "Start: error", "bad");
+      addLog("ERROR: " + (e && e.message ? e.message : String(e)));
     }
   }
 
-  async function enableMic() {
-    if (!SDK || !room) { addLog("Mic: room not ready."); return; }
+  async function doInterrupt() {
     try {
-      if (micTrack) { addLog("Mic already enabled."); return; }
-      micTrack = await SDK.createLocalAudioTrack();
-      await room.localParticipant.publishTrack(micTrack);
-      setBadge(micBadge, "Mic: ON", "good");
-      addLog("Local microphone published.");
+      const url = PAYLOAD.api_base + "/streaming.interrupt";
+      addLog("POST " + url);
+      const r = await fetch(url, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ session_id: PAYLOAD.session_id })
+      });
+      const txt = await r.text();
+      addLog("Interrupt HTTP " + r.status + " body=" + (txt ? txt.slice(0, 300) : ""));
     } catch (e) {
-      setBadge(micBadge, "Mic: error", "bad");
-      addLog("Mic error: " + (e && e.message ? e.message : String(e)));
+      addLog("Interrupt error: " + (e && e.message ? e.message : String(e)));
     }
   }
 
-  // In Custom mode, speech is controlled via HeyGen REST streaming.task (task_type=repeat).
-  // The "Speak" button here is only a UX helper: it posts a message to parent (Streamlit) so the backend can call streaming.task.
-  function requestSpeak() {
-    addLog("Speak pressed. Asking parent to send streaming.task …");
-    window.parent.postMessage({ type: "HEYGEN_SPEAK_REQUEST", nonce: PAYLOAD.nonce }, "*");
+  async function speakRepeat(text) {
+    try {
+      const t = String(text || "").trim();
+      if (!t) { addLog("Speak blocked: empty text."); return; }
+
+      if (PAYLOAD.do_interrupt) {
+        addLog("Auto: interrupt before speak…");
+        await doInterrupt();
+        const ms = Number(PAYLOAD.interrupt_delay_ms || 0);
+        if (ms > 0) { addLog("Delay " + ms + "ms…"); await new Promise(r=>setTimeout(r, ms)); }
+      }
+
+      const url = PAYLOAD.api_base + "/streaming.task";
+      const payload = {
+        session_id: PAYLOAD.session_id,
+        text: t,
+        task_type: "repeat",
+        task_mode: "sync"
+      };
+
+      addLog("POST " + url + " task_type=repeat chars=" + t.length);
+      const r = await fetch(url, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const txt = await r.text();
+      addLog("Task HTTP " + r.status + " body=" + (txt ? txt.slice(0, 500) : ""));
+
+      if (!r.ok) addLog("Task failed (non-200).");
+      else addLog("Task sent OK.");
+
+    } catch (e) {
+      addLog("Speak error: " + (e && e.message ? e.message : String(e)));
+    }
   }
 
   document.getElementById("reconnectBtn").addEventListener("click", async () => {
     addLog("Reconnect pressed.");
-    try { if (room) await room.disconnect(); } catch {}
-    room = null;
-    await connect();
+    await connectWebRTCAndStart();
   });
 
-  document.getElementById("micBtn").addEventListener("click", async () => {
-    addLog("Enable Mic pressed.");
-    await enableMic();
+  document.getElementById("interruptBtn").addEventListener("click", async () => {
+    addLog("Interrupt pressed.");
+    await doInterrupt();
   });
 
-  document.getElementById("speakBtn").addEventListener("click", () => requestSpeak());
+  document.getElementById("speakBtn").addEventListener("click", async () => {
+    addLog("Speak pressed.");
+    await speakRepeat(PAYLOAD.default_text || "Hello");
+  });
 
   // Auto-connect
-  connect();
+  connectWebRTCAndStart();
 </script>
 </body>
 </html>
