@@ -1,312 +1,213 @@
 <!doctype html>
 <html>
 <head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>LiveAvatar Viewer</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HeyGen Streaming Avatar Viewer (Custom Mode)</title>
 
-  <!-- Requested static include -->
+  <!-- LiveKit SDK (UMD). Note: Some environments block external scripts in iframes. -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/livekit-client/2.15.7/livekit-client.umd.min.js"></script>
 
   <style>
-    :root{
-      --bg:#0b0b0b; --panel:rgba(0,0,0,.55); --text:#fff; --muted:rgba(255,255,255,.75);
-      --ok:#9AF7B0; --warn:#ffd37a; --bad:#ff8a8a;
-    }
-    html,body{height:100%; margin:0; background:var(--bg); color:var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;}
-    .frame{height:100%; display:grid; grid-template-rows:auto 1fr; gap:10px; padding:12px; box-sizing:border-box;}
-    .header{font-size:20px; font-weight:800; opacity:.95}
-    .stage{position:relative; width:100%; height:100%; border-radius:18px; overflow:hidden; background:#111;}
-    video{width:100%; height:100%; object-fit:cover; background:#111}
-    .overlay{position:absolute; left:10px; right:10px; bottom:10px; background:var(--panel);
-      border-radius:14px; padding:10px 12px; font-size:12px; line-height:1.35; z-index:6}
-    .row{display:flex; gap:10px; flex-wrap:wrap; align-items:center}
-    .pill{border-radius:999px; padding:4px 10px; background:rgba(255,255,255,.10); color:var(--muted); font-size:12px}
-    .pill.ok{color:var(--ok)} .pill.warn{color:var(--warn)} .pill.bad{color:var(--bad)}
-    .btn{cursor:pointer; border:0; border-radius:10px; padding:7px 10px; background:rgba(255,255,255,.14); color:var(--text); font-weight:800; font-size:12px}
-    .btn:hover{background:rgba(255,255,255,.18)}
-    .log{margin-top:8px; max-height:190px; overflow:auto;
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      white-space: pre-wrap; color: rgba(255,255,255,.78); font-size:11px}
+    :root { color-scheme: dark; }
+    body { margin: 0; background: #0b0b0b; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .frame { position: relative; width: 100%; height: 760px; background: #000; border-radius: 22px; overflow: hidden; }
+    video { width: 100%; height: 100%; object-fit: cover; background: #000; }
+    .hud { position: absolute; left: 16px; right: 16px; bottom: 16px; background: rgba(0,0,0,0.55); border: 1px solid rgba(255,255,255,0.12); border-radius: 18px; padding: 14px; }
+    .topbar { position:absolute; left: 16px; top: 14px; font-size: 28px; font-weight: 650; color: #fff; text-shadow: 0 2px 10px rgba(0,0,0,0.65); }
+    .badges { display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom: 10px; }
+    .badge { padding: 8px 12px; border-radius: 999px; background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.10); color: #cfd3d8; font-size: 14px; }
+    .badge.good { color: #7ef29d; }
+    .badge.bad { color: #ff8b8b; }
+    .btns { display:flex; gap: 10px; margin: 10px 0; }
+    button { appearance:none; border:none; padding: 10px 14px; border-radius: 14px; background: rgba(255,255,255,0.10); color:#fff; font-size: 16px; cursor:pointer; }
+    button:hover { background: rgba(255,255,255,0.15); }
+    .log { max-height: 160px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 13px; line-height: 1.35; color: #d6d6d6; white-space: pre-wrap; }
+    .muted { opacity: 0.9; }
   </style>
 </head>
 
 <body>
   <div class="frame">
-    <div class="header">__AVATAR_NAME__ · Live session</div>
+    <div class="topbar" id="title">Live session</div>
+    <video id="avatarVideo" autoplay playsinline></video>
 
-    <div class="stage">
-      <video id="avatarVideo" autoplay playsinline></video>
-
-      <div class="overlay">
-        <div class="row">
-          <span id="sdkPill" class="pill">SDK: checking…</span>
-          <span id="roomPill" class="pill">Room: idle</span>
-          <span id="micPill" class="pill">Mic: off</span>
-          <span id="trkPill" class="pill">Tracks: 0</span>
-          <button class="btn" id="reconnectBtn" type="button">Reconnect</button>
-          <button class="btn" id="micBtn" type="button">Enable Mic</button>
-          <button class="btn" id="speakBtn" type="button">Speak</button>
-        </div>
-        <div class="log" id="log"></div>
+    <div class="hud">
+      <div class="badges">
+        <div class="badge" id="sdkBadge">SDK: checking…</div>
+        <div class="badge" id="roomBadge">Room: idle</div>
+        <div class="badge" id="micBadge">Mic: off</div>
+        <div class="badge" id="trackBadge">Tracks: 0</div>
       </div>
+
+      <div class="btns">
+        <button id="reconnectBtn">Reconnect</button>
+        <button id="micBtn">Enable Mic</button>
+        <button id="speakBtn">Speak</button>
+      </div>
+
+      <div class="log" id="log"></div>
     </div>
   </div>
 
-  <script>
-    const LIVEKIT_URL = "__LIVEKIT_URL__";
-    const LIVEKIT_TOKEN = "__LIVEKIT_TOKEN__";
-    const SPEAK_PAYLOAD = __SPEAK_PAYLOAD_JSON__;
+<script>
+  // Payload injected by Streamlit (do not rename placeholder)
+  const PAYLOAD = /*__PAYLOAD__*/;
 
-    const logEl = document.getElementById("log");
-    const sdkPill = document.getElementById("sdkPill");
-    const roomPill = document.getElementById("roomPill");
-    const micPill = document.getElementById("micPill");
-    const trkPill = document.getElementById("trkPill");
-    const videoEl = document.getElementById("avatarVideo");
+  const logEl = document.getElementById("log");
+  const sdkBadge = document.getElementById("sdkBadge");
+  const roomBadge = document.getElementById("roomBadge");
+  const micBadge = document.getElementById("micBadge");
+  const trackBadge = document.getElementById("trackBadge");
+  const titleEl = document.getElementById("title");
+  const videoEl = document.getElementById("avatarVideo");
 
-    function log(msg){
-      const t=new Date().toISOString().slice(11,19);
-      logEl.textContent += `[${t}] ${msg}\n`;
-      logEl.scrollTop = logEl.scrollHeight;
-    }
-    function setPill(el, text, cls){ el.textContent=text; el.className="pill"+(cls?(" "+cls):""); }
+  titleEl.textContent = (PAYLOAD.avatar_name || "Avatar") + " · Live session";
 
-    window.addEventListener("error", (e)=>log(`window.onerror: ${e.message}`));
-    window.addEventListener("unhandledrejection",(e)=>log(`unhandledrejection: ${e.reason}`));
+  function ts() {
+    const d = new Date();
+    return d.toTimeString().slice(0,8);
+  }
+  function addLog(msg) {
+    logEl.textContent += `[${ts()}] ${msg}\n`;
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function setBadge(el, label, state) {
+    el.textContent = label;
+    el.classList.remove("good","bad");
+    if (state === "good") el.classList.add("good");
+    if (state === "bad") el.classList.add("bad");
+  }
 
-    function sleep(ms){ return new Promise(r=>setTimeout(r, ms)); }
+  addLog("Viewer boot.");
+  addLog("Payload: nonce=" + PAYLOAD.nonce);
 
-    // ---- LiveKit SDK loader (static tag may be blocked; try fallbacks) ----
-    function findLiveKitSDK(){
-      const guesses = [
-        window.LivekitClient,   // known working in your earlier run
-        window.LiveKitClient,
-        window.LiveKit,
-        window.livekit,
-        window.LiveKitSDK
-      ].filter(Boolean);
+  // LiveKit UMD exposes either LivekitClient or livekit (depending on build/CDN)
+  function findLiveKitSDK() {
+    if (window.LivekitClient) return window.LivekitClient;
+    if (window.livekit) return window.livekit;
+    if (window.LiveKitClient) return window.LiveKitClient;
+    return null;
+  }
 
-      for(const g of guesses){
-        if(g && g.Room && g.RoomEvent) return { sdk:g, name:"guessed/global" };
-      }
+  const SDK = findLiveKitSDK();
+  if (!SDK) {
+    setBadge(sdkBadge, "SDK: missing", "bad");
+    setBadge(roomBadge, "Room: SDK missing", "bad");
+    addLog("LiveKit SDK missing in iframe. Check CDN / CSP.");
+  } else {
+    setBadge(sdkBadge, "SDK: loaded", "good");
+    addLog("LiveKit SDK found.");
+  }
 
-      const keys = Object.keys(window).filter(k => /livekit/i.test(k));
-      if(keys.length) log("window keys matching /livekit/i: " + keys.join(", "));
-      for(const k of keys){
-        try{
-          const v = window[k];
-          if(v && v.Room && v.RoomEvent) return { sdk:v, name:k };
-        }catch{}
-      }
-      return null;
-    }
+  let room = null;
+  let micTrack = null;
 
-    function loadScript(url){
-      return new Promise((resolve, reject)=>{
-        const s=document.createElement("script");
-        s.src=url; s.async=true;
-        s.onload=()=>resolve(true);
-        s.onerror=()=>reject(new Error("Failed to load: "+url));
-        document.head.appendChild(s);
+  function updateTracks() {
+    try {
+      if (!room) { trackBadge.textContent = "Tracks: 0"; return; }
+      const count = room.remoteParticipants ? Array.from(room.remoteParticipants.values()).reduce((acc,p)=>acc + p.trackPublications.size,0) : 0;
+      trackBadge.textContent = "Tracks: " + count;
+    } catch { /* ignore */ }
+  }
+
+  async function connect() {
+    if (!SDK) return;
+    try {
+      setBadge(roomBadge, "Room: connecting…", null);
+      addLog("Connecting to LiveKit…");
+      addLog("URL: " + PAYLOAD.livekit_url);
+      addLog("Token length: " + (PAYLOAD.livekit_token ? PAYLOAD.livekit_token.length : 0));
+      const delay = Number(PAYLOAD.connect_delay_ms || 0);
+      if (delay > 0) { addLog("Connect delay: waiting " + delay + "ms…"); await new Promise(r=>setTimeout(r,delay)); }
+
+      room = new SDK.Room({
+        adaptiveStream: true,
+        dynacast: true,
       });
-    }
 
-    async function ensureSDK(){
-      let found = findLiveKitSDK();
-      if(found){
-        setPill(sdkPill, "SDK: loaded", "ok");
-        log("LiveKit SDK found via " + found.name);
-        return found.sdk;
-      }
-
-      setPill(sdkPill, "SDK: loading…", "warn");
-      const fallbacks = [
-        "https://cdn.jsdelivr.net/npm/livekit-client@2.15.7/dist/livekit-client.umd.min.js",
-        "https://unpkg.com/livekit-client@2.15.7/dist/livekit-client.umd.min.js",
-      ];
-      for(const u of fallbacks){
-        try{
-          log("Loading SDK: " + u);
-          await loadScript(u);
-          await sleep(150);
-          found = findLiveKitSDK();
-          if(found){
-            setPill(sdkPill, "SDK: loaded", "ok");
-            log("LiveKit SDK found via " + found.name);
-            return found.sdk;
-          }
-          log("Loaded script but still no usable LiveKit global.");
-        }catch(e){
-          log("Error: " + (e && e.message ? e.message : String(e)));
+      room.on("trackSubscribed", (track, publication, participant) => {
+        addLog(`TrackSubscribed: kind=${track.kind}, from=${participant.identity}`);
+        if (track.kind === "video") {
+          const el = track.attach();
+          el.autoplay = true;
+          el.playsInline = true;
+          el.muted = true; // avoid autoplay policies; we only need avatar audio track separately
+          el.style.width = "100%";
+          el.style.height = "100%";
+          el.style.objectFit = "cover";
+          // replace current video
+          videoEl.replaceWith(el);
+          el.id = "avatarVideo";
+          addLog("Attached avatar video.");
+        } else if (track.kind === "audio") {
+          const audioEl = track.attach();
+          audioEl.autoplay = true;
+          audioEl.controls = false;
+          audioEl.style.display = "none";
+          document.body.appendChild(audioEl);
+          addLog("Attached avatar audio.");
         }
-      }
+        updateTracks();
+      });
 
-      setPill(sdkPill, "SDK: missing", "bad");
-      log("LiveKit SDK missing in iframe. Check CDN/CSP.");
-      return null;
-    }
+      room.on("disconnected", () => {
+        setBadge(roomBadge, "Room: disconnected", "bad");
+        addLog("Disconnected.");
+      });
 
-    // ---- LiveKit room + tracks ----
-    let LK = null;
-    let room = null;
-    let remoteVideoTrack = null;
-    let remoteAudioTracks = [];
-    let localMicTrack = null;
+      await room.connect(PAYLOAD.livekit_url, PAYLOAD.livekit_token);
+      setBadge(roomBadge, "Room: connected", "good");
+      addLog("Connected.");
+      updateTracks();
 
-    function trackCount(){
-      return (remoteVideoTrack?1:0) + remoteAudioTracks.length + (localMicTrack?1:0);
-    }
-
-    function updateTracksPill(){
-      const n = trackCount();
-      setPill(trkPill, `Tracks: ${n}`, n ? "ok" : "");
-    }
-
-    async function connectRoom(){
-      LK = await ensureSDK();
-      if(!LK){
-        setPill(roomPill, "Room: SDK missing", "bad");
-        return;
-      }
-
-      try{
-        setPill(roomPill, "Room: connecting…", "warn");
-        log("Connecting to LiveKit…");
-        log("URL: " + LIVEKIT_URL);
-        log("Token length: " + (LIVEKIT_TOKEN ? LIVEKIT_TOKEN.length : 0));
-
-        room = new LK.Room({ adaptiveStream:true, dynacast:true });
-
-        room.on(LK.RoomEvent.TrackSubscribed, (track, pub, participant)=>{
-          log(`TrackSubscribed: kind=${track.kind}, from=${participant.identity}`);
-
-          if(track.kind==="video" && !remoteVideoTrack){
-            remoteVideoTrack = track;
-            track.attach(videoEl);
-            log("Attached avatar video.");
-          }
-
-          if(track.kind==="audio"){
-            const a=document.createElement("audio");
-            a.autoplay=true; a.playsInline=true;
-            document.body.appendChild(a);
-            track.attach(a);
-            track.__audioEl=a;
-            remoteAudioTracks.push(track);
-            log("Attached avatar audio.");
-          }
-
-          updateTracksPill();
-        });
-
-        room.on(LK.RoomEvent.Disconnected, (reason)=>{
-          setPill(roomPill, "Room: disconnected", "bad");
-          log("Disconnected: " + reason);
-        });
-
-        room.on(LK.RoomEvent.DataReceived, (payload, participant, kind, topic)=>{
-          try{
-            const txt = new TextDecoder().decode(payload);
-            log(`DataReceived from=${participant?.identity || "?"} topic=${topic||""}: ${txt}`);
-          }catch{
-            log("DataReceived (binary)");
-          }
-        });
-
-        const connectDelay = Number(SPEAK_PAYLOAD?.connect_delay_ms || 0);
-        if(connectDelay > 0){
-          log(`Connect delay: waiting ${connectDelay}ms…`);
-          await sleep(connectDelay);
-        }
-
-        await room.connect(LIVEKIT_URL, LIVEKIT_TOKEN);
-
-        setPill(roomPill, "Room: connected", "ok");
-        log("Connected.");
-        updateTracksPill();
-      }catch(e){
-        setPill(roomPill, "Room: error", "bad");
-        log("Connect error: " + (e && e.message ? e.message : String(e)));
-      }
-    }
-
-    // ---- Mic publish (audio only) ----
-    async function enableMic(){
-      if(!LK || !room || !room.localParticipant){
-        log("Mic blocked: room not ready.");
-        return;
-      }
-      try{
-        setPill(micPill, "Mic: requesting…", "warn");
-        localMicTrack = await LK.createLocalAudioTrack();
-        await room.localParticipant.publishTrack(localMicTrack);
-        setPill(micPill, "Mic: ON", "ok");
-        log("Local microphone published.");
-        updateTracksPill();
-      }catch(e){
-        setPill(micPill, "Mic: denied", "bad");
-        log("Mic error: " + (e && e.message ? e.message : String(e)));
-      }
-    }
-
-    // ---- Command events: interrupt -> wait -> speak_text ----
-    async function sendCommand(obj){
-      if(!room || !room.localParticipant){
-        log("Command blocked: room not connected.");
-        return;
-      }
-      const bytes = new TextEncoder().encode(JSON.stringify(obj));
-      await room.localParticipant.publishData(bytes, { reliable:true });
-    }
-
-    async function interruptThenSpeak(){
-      const text = (SPEAK_PAYLOAD && SPEAK_PAYLOAD.text) ? String(SPEAK_PAYLOAD.text) : "";
-      if(!text.trim()){
-        log("Speak blocked: empty text.");
-        return;
-      }
-      try{
-        if(!!SPEAK_PAYLOAD?.interrupt_before_speak){
-          await sendCommand({ event:"avatar.interrupt", data:{} });
-          log("Command sent: avatar.interrupt");
-          await sleep(Number(SPEAK_PAYLOAD?.interrupt_delay_ms || 500));
-        }
-        await sendCommand({ event:"avatar.speak_text", data:{ text } });
-        log(`Command sent: avatar.speak_text (chars=${text.length})`);
-      }catch(e){
-        log("Speak error: " + (e && e.message ? e.message : String(e)));
-      }
-    }
-
-    // ---- Buttons ----
-    document.getElementById("reconnectBtn").addEventListener("click", async ()=>{
-      log("Reconnect pressed.");
-      try{ if(room) await room.disconnect(); }catch{}
-      room=null; LK=null; localMicTrack=null;
-      setPill(micPill, "Mic: off", "");
-      setPill(roomPill, "Room: idle", "");
-      setPill(sdkPill, "SDK: checking…", "");
-      remoteVideoTrack=null; remoteAudioTracks=[];
-      updateTracksPill();
-      await connectRoom();
-    });
-
-    document.getElementById("micBtn").addEventListener("click", enableMic);
-    document.getElementById("speakBtn").addEventListener("click", interruptThenSpeak);
-
-    // ---- Boot ----
-    (async ()=>{
-      log("Viewer boot.");
-      log("Payload: nonce=" + (SPEAK_PAYLOAD ? SPEAK_PAYLOAD.nonce : "null"));
-      await connectRoom();
-
-      if(SPEAK_PAYLOAD?.publish_microphone){
-        await sleep(300);
-        log("Auto: enabling mic …");
+      if (PAYLOAD.auto_enable_mic) {
+        addLog("Auto: enabling mic …");
         await enableMic();
       }
-    })();
-  </script>
+    } catch (e) {
+      setBadge(roomBadge, "Room: error", "bad");
+      addLog("Connect error: " + (e && e.message ? e.message : String(e)));
+    }
+  }
+
+  async function enableMic() {
+    if (!SDK || !room) { addLog("Mic: room not ready."); return; }
+    try {
+      if (micTrack) { addLog("Mic already enabled."); return; }
+      micTrack = await SDK.createLocalAudioTrack();
+      await room.localParticipant.publishTrack(micTrack);
+      setBadge(micBadge, "Mic: ON", "good");
+      addLog("Local microphone published.");
+    } catch (e) {
+      setBadge(micBadge, "Mic: error", "bad");
+      addLog("Mic error: " + (e && e.message ? e.message : String(e)));
+    }
+  }
+
+  // In Custom mode, speech is controlled via HeyGen REST streaming.task (task_type=repeat).
+  // The "Speak" button here is only a UX helper: it posts a message to parent (Streamlit) so the backend can call streaming.task.
+  function requestSpeak() {
+    addLog("Speak pressed. Asking parent to send streaming.task …");
+    window.parent.postMessage({ type: "HEYGEN_SPEAK_REQUEST", nonce: PAYLOAD.nonce }, "*");
+  }
+
+  document.getElementById("reconnectBtn").addEventListener("click", async () => {
+    addLog("Reconnect pressed.");
+    try { if (room) await room.disconnect(); } catch {}
+    room = null;
+    await connect();
+  });
+
+  document.getElementById("micBtn").addEventListener("click", async () => {
+    addLog("Enable Mic pressed.");
+    await enableMic();
+  });
+
+  document.getElementById("speakBtn").addEventListener("click", () => requestSpeak());
+
+  // Auto-connect
+  connect();
+</script>
 </body>
 </html>
